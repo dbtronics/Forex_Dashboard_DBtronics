@@ -14,7 +14,7 @@ A MetaTrader 5 (MT5) account monitoring system that fetches live trading account
 Forex_Dashboard_DBtronics/
 ├── API_Fetch_Data/
 │   ├── api_metatrader5.py          # Original MT5 data fetcher (CSV-based)
-│   └── api_metatrader5_updated.py  # Updated MT5 data fetcher (Google Sheets-based)
+│   └── api_metatrader5_updated.py  # Updated MT5 data fetcher (Google Sheets + SMS)
 ├── templates/
 │   ├── index2.html                 # Main Flask dashboard template (active)
 │   ├── index.html                  # Alternative JS-driven layout (inactive)
@@ -23,6 +23,7 @@ Forex_Dashboard_DBtronics/
 │   └── styles.css                  # Dashboard table styling
 ├── UI_flask.py                     # Flask web application
 ├── requirements.txt                # Python dependencies
+├── .env                            # Twilio credentials and SMS recipients (excluded from git)
 ├── cron.log                        # Runtime log (auto-generated, excluded from git)
 └── .gitignore
 ```
@@ -53,11 +54,11 @@ The original script that fetches MT5 account data and writes it to a local CSV f
 
 ### 2. `API_Fetch_Data/api_metatrader5_updated.py` — Updated Data Fetcher (Active)
 
-The current production script. Replaces the local CSV credentials file with Google Sheets, writes daily performance data back to Google Sheets, and is designed to run on a scheduled basis via Windows Task Scheduler.
+The current production script. Replaces the local CSV credentials file with Google Sheets, writes daily performance data back to Google Sheets, sends SMS notifications via Twilio, and is designed to run on a scheduled basis via Windows Task Scheduler.
 
 **How it works:**
 
-Credentials are read from the **`Account`** sheet in the **`STS Database`** Google Spreadsheet. Only accounts with `Status = Active` are processed. Each account's `ID`, `Password`, and `Server` are used to authenticate with MT5.
+Credentials are read from the **`Account`** sheet in the **`STS Database`** Google Spreadsheet. Column positions are resolved dynamically from the header row, so reordering columns in the sheet will not break the script. Only accounts with `Status = Active` are processed. Each account's `ID`, `Password`, `Server`, and `Type` are used.
 
 For each active account, the script fetches the current `Balance` and `Equity` from MT5 and writes the result to the **`Acc_data`** sheet in the same spreadsheet.
 
@@ -87,6 +88,57 @@ python API_Fetch_Data/api_metatrader5_updated.py end
 **Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`)
 
 **Logging:** Every run appends to `cron.log` in the project root with timestamps, account-level results, and any warnings.
+
+---
+
+### SMS Notifications (Twilio)
+
+After each run completes, SMS alerts are sent to all numbers defined in `.env` under `SMS_RECIPIENTS`. Recipients receive identical messages. Numbers can be added or removed from `.env` without any code changes.
+
+#### START run — 1 SMS (run summary)
+
+```
+[Forex Dashboard] START Run Complete
+Date: 1-Apr-26 | Time: 04:00 PM MST
+
+Summary:
+  Total accounts : 15
+  Recorded       : 13
+  Skipped        : 2
+
+Skipped accounts:
+  - 500561 (MT5 login failed)
+  - 512345 (Start row already exists)
+```
+
+#### END run — 2 SMS
+
+**Message 1: Run summary**
+```
+[Forex Dashboard] END Run Complete
+Date: 1-Apr-26 | Time: 03:00 PM MST
+
+Summary:
+  Total accounts : 15
+  Recorded       : 13
+  Skipped        : 2
+
+Skipped accounts:
+  - 500561 (MT5 login failed)
+  - 512345 (No start row found)
+```
+
+**Message 2: Daily performance report**
+```
+[Forex Dashboard] Daily Performance Report
+Date: 1-Apr-26
+
+Account         Type           Bal Delta   Eq Delta
+--------------- -------------- ---------- ----------
+541202045       Trader         +$220.20   +$220.20
+541202046       Copytrading    -$150.00   -$148.50
+541202047       Rider          +$0.00     +$12.30
+```
 
 ---
 
@@ -134,6 +186,16 @@ Place the service account JSON key file in the project root:
 Forex_Dashboard_DBtronics/n8n-automation-dbtronics-49815df8eb82.json
 ```
 This file is excluded from git via `.gitignore`. It must be manually copied to each machine.
+
+### Twilio & SMS configuration
+Fill in the `.env` file in the project root with your Twilio credentials:
+```
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_auth_token_here
+TWILIO_FROM_NUMBER=+1xxxxxxxxxx
+SMS_RECIPIENTS=+1xxxxxxxxxx,+1xxxxxxxxxx
+```
+`.env` is excluded from git. Add or remove recipient numbers in `SMS_RECIPIENTS` at any time — no code changes required.
 
 ---
 
