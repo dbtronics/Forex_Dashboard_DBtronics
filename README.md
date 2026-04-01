@@ -1,16 +1,183 @@
-<p><a target="_blank" href="https://app.eraser.io/workspace/hsDlg3dpdZh3to4ZMfH7" id="edit-in-eraser-github-link"><img alt="Edit in Eraser" src="https://firebasestorage.googleapis.com/v0/b/second-petal-295822.appspot.com/o/images%2Fgithub%2FOpen%20in%20Eraser.svg?alt=media&amp;token=968381c8-a7e7-472a-8ed6-4a6626da5501"></a></p>
+<p><a target="_blank" href="https://app.eraser.io/workspace/hsDlg3dpdZh3to4ZMfH7" id="edit-in-eraser-github-link"><img alt="Edit in Eraser" src="https://firebasestorage.googleapis.com/v0/b/second-petal-295822.appspot.com/o/images%2Fgithub%2FOpen%20in%20Eraser.svg?alt=media&token=968381c8-a7e7-472a-8ed6-4a6626da5501"></a></p>
 
-# Forex_Dashboard
-Going with main Python API Data Fetch and this only supports MT5 only. There is not support for MT4 at the moment.
+# Forex Dashboard — DBtronics
 
-![Python API](/.eraser/hsDlg3dpdZh3to4ZMfH7___RjBDyi3vteXAY5KNDoWEt0Ma2Iv2___---figure---0_feIFNZKJKSZYWs8gdoX---figure---Rb004950HLmiZUOlSe0lwg.png "Python API")
+A MetaTrader 5 (MT5) account monitoring system that fetches live trading account data, logs daily performance metrics to Google Sheets, and serves a web-based dashboard for visualisation.
 
-We might consider REST API data fetch as well in the future. The REST API version will also have support for MT4 and MT5 as well. This is what the future version of the implementation looks like:
+> **Platform support:** MT5 only. MT4 support is not available at this time.
 
-![REST API](/.eraser/hsDlg3dpdZh3to4ZMfH7___RjBDyi3vteXAY5KNDoWEt0Ma2Iv2___---figure---Ua7E2hCv2ZfLWMcinW2dP---figure---1aY05rM0n1sYZqVFmTqhRA.png "REST API")
+---
 
+## Repository Structure
 
+```
+Forex_Dashboard_DBtronics/
+├── API_Fetch_Data/
+│   ├── api_metatrader5.py          # Original MT5 data fetcher (CSV-based)
+│   └── api_metatrader5_updated.py  # Updated MT5 data fetcher (Google Sheets-based)
+├── templates/
+│   ├── index2.html                 # Main Flask dashboard template (active)
+│   ├── index.html                  # Alternative JS-driven layout (inactive)
+│   └── account.html                # Per-account detail view (inactive)
+├── static/
+│   └── styles.css                  # Dashboard table styling
+├── UI_flask.py                     # Flask web application
+├── requirements.txt                # Python dependencies
+├── cron.log                        # Runtime log (auto-generated, excluded from git)
+└── .gitignore
+```
 
+---
+
+## Components
+
+### 1. `API_Fetch_Data/api_metatrader5.py` — Original Data Fetcher
+
+The original script that fetches MT5 account data and writes it to a local CSV file for the Flask dashboard to consume.
+
+**How it works:**
+- Reads MT5 login credentials (`Login`, `Password`, `Server`) from a local `api_credentials.csv` file stored in the NextCloud root directory (outside this repository for security)
+- Loops through all accounts and logs into each one via the MT5 Python API
+- Fetches account metrics: Balance, Equity, Margin, Free Margin, Floating PnL
+- Retrieves server time via the EURUSD tick and converts to US/Mountain local time
+- Calculates `% Difference Balance` and `% Difference Equity` using start-of-day values stored in the credentials file
+- Writes all data to `api_web.csv` every 5 seconds in a continuous loop
+
+**Trigger:** Runs continuously until manually stopped (`Ctrl+C`)
+
+**Output:** `api_web.csv` — read by `UI_flask.py` for the dashboard
+
+**Note:** This script is kept for reference. Active use has moved to `api_metatrader5_updated.py`.
+
+---
+
+### 2. `API_Fetch_Data/api_metatrader5_updated.py` — Updated Data Fetcher (Active)
+
+The current production script. Replaces the local CSV credentials file with Google Sheets, writes daily performance data back to Google Sheets, and is designed to run on a scheduled basis via Windows Task Scheduler.
+
+**How it works:**
+
+Credentials are read from the **`Account`** sheet in the **`STS Database`** Google Spreadsheet. Only accounts with `Status = Active` are processed. Each account's `ID`, `Password`, and `Server` are used to authenticate with MT5.
+
+For each active account, the script fetches the current `Balance` and `Equity` from MT5 and writes the result to the **`Acc_data`** sheet in the same spreadsheet.
+
+The script is invoked with a `start` or `end` argument that determines what gets written:
+
+| Argument | When to run | What it writes |
+|----------|-------------|----------------|
+| `start` | 4:00 PM MST daily | Appends a new row: `Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity` |
+| `end` | 3:00 PM MST next day | Finds yesterday's row and fills `EnddayBalance`, `EnddayEquity` |
+
+> The start and end runs fall on different calendar dates in MST (4 PM Day 1 → 3 PM Day 2), so the end run always looks for **yesterday's** row to find its matching start entry.
+
+**Edge cases handled:**
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Start runs twice on the same day | Skips second run, logs a warning |
+| End runs and yesterday's row is missing | Logs a warning and skips (start was likely missed) |
+| End runs twice on the same day | Overwrites EnddayBalance/Equity with latest values, logs a warning |
+
+**Usage:**
+```bash
+python API_Fetch_Data/api_metatrader5_updated.py start
+python API_Fetch_Data/api_metatrader5_updated.py end
+```
+
+**Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`)
+
+**Logging:** Every run appends to `cron.log` in the project root with timestamps, account-level results, and any warnings.
+
+---
+
+### 3. `UI_flask.py` — Flask Web Dashboard
+
+A lightweight Flask application that serves a browser-based dashboard displaying live MT5 account data.
+
+**How it works:**
+- Exposes a single route `/` (home page)
+- Reads `api_web.csv` (written by `api_metatrader5.py`) using pandas
+- Normalises the `Type` column to lowercase for consistent filtering
+- Renders `templates/index2.html` with the account data
+
+**Dashboard layout (`index2.html`):**
+- Auto-refreshes every 60 seconds
+- Splits accounts into three sections based on account type:
+  - **Challenge / Funded** — accounts of type `challenge` or `funded`
+  - **Live** — accounts of type `live`
+  - **Demo** — accounts of type `demo`
+
+**Run:**
+```bash
+python UI_flask.py
+```
+
+**Note:** The Flask dashboard currently depends on `api_web.csv` which is written by the original `api_metatrader5.py` script. Integration with the updated Google Sheets pipeline is planned for a future update.
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.x
+- MetaTrader 5 terminal installed (**Windows only** — the MT5 Python API does not support macOS or Linux)
+- A Google Cloud service account JSON key with access to the `STS Database` spreadsheet
+
+### Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Google Sheets authentication
+Place the service account JSON key file in the project root:
+```
+Forex_Dashboard_DBtronics/n8n-automation-dbtronics-49815df8eb82.json
+```
+This file is excluded from git via `.gitignore`. It must be manually copied to each machine.
+
+---
+
+## Windows Task Scheduler Setup
+
+To run the updated script automatically twice a day:
+
+| Task | Time | Command |
+|------|------|---------|
+| Forex Start Run | 4:00 PM daily | `python API_Fetch_Data\api_metatrader5_updated.py start` |
+| Forex End Run | 3:00 PM daily | `python API_Fetch_Data\api_metatrader5_updated.py end` |
+
+Set the **Start in** directory to:
+```
+C:\Users\Administrator\Desktop\Forex_Dashboard_DBtronics
+```
+
+---
+
+## Logging
+
+Each run of `api_metatrader5_updated.py` appends to `cron.log` in the project root. Example output:
+
+```
+2026-04-01 16:00:01 [INFO] ────────────────────────────────────────────────────────────
+2026-04-01 16:00:01 [INFO] Run type : START
+2026-04-01 16:00:01 [INFO] Active accounts found: 15
+2026-04-01 16:00:01 [INFO] ────────────────────────────────────────────────────────────
+2026-04-01 16:00:03 [INFO] Account: 541202045 | Balance: 105220.2 | Equity: 105220.2
+2026-04-01 16:00:04 [INFO]   [START] New row written → 541202045 | Date: 1-Apr-26 | StartdayBalance=105220.2, StartdayEquity=105220.2
+2026-04-01 16:00:05 [WARNING]   MT5 login failed for 500561 — skipping
+2026-04-01 16:00:45 [INFO] Run completed successfully.
+```
+
+`cron.log` is excluded from git and lives only on the machine running the scheduler.
+
+---
+
+## Future Work
+- Integrate Flask dashboard with Google Sheets data (replacing `api_web.csv` dependency)
+- Add MT4 support via REST API
+- Add deposit and withdrawal history tracking via `mt5.history_deals_get()`
+
+---
 
 <!-- eraser-additional-content -->
 ## Diagrams
