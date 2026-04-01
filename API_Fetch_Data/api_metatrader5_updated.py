@@ -31,6 +31,7 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+import pytz
 import MetaTrader5 as mt5
 import gspread
 from google.oauth2.service_account import Credentials
@@ -187,6 +188,16 @@ def get_date_str(date):
     return date.strftime('%#d-%b-%y')
 
 
+def get_mst_time():
+    """
+    Returns the current time converted to MST (US/Mountain).
+    The Windows server runs on CST — this ensures SMS timestamps
+    always reflect MST regardless of the system timezone.
+    """
+    mst = pytz.timezone('US/Mountain')
+    return datetime.now(mst)
+
+
 def send_sms(body):
     """
     Send an SMS to all numbers in SMS_RECIPIENTS using Twilio.
@@ -221,7 +232,7 @@ def build_start_sms(run_date, results):
 
     lines = [
         "[Forex Dashboard] START Run Complete",
-        f"Date: {run_date} | Time: {datetime.now().strftime('%I:%M %p')} MST",
+        f"Date: {run_date} | Time: {get_mst_time().strftime('%I:%M %p')} MST",
         "",
         "Summary:",
         f"  Total accounts : {total}",
@@ -253,7 +264,7 @@ def build_end_summary_sms(run_date, results):
 
     lines = [
         "[Forex Dashboard] END Run Complete",
-        f"Date: {run_date} | Time: {datetime.now().strftime('%I:%M %p')} MST",
+        f"Date: {run_date} | Time: {get_mst_time().strftime('%I:%M %p')} MST",
         "",
         "Summary:",
         f"  Total accounts : {total}",
@@ -316,21 +327,24 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, balan
 
     Returns a result dict used for SMS reporting.
     """
-    today          = get_date_str(datetime.now())
+    # Start run at 4 PM MST opens the NEXT calendar day's trading session.
+    # e.g. start runs on Apr 1 at 4 PM → trading day is Apr 2.
+    # End run on Apr 2 at 3 PM will look for today's date (Apr 2) to match.
+    trading_date   = get_date_str(datetime.now() + timedelta(days=1))
     account_id_str = str(account_id)
 
-    # Check if a row already exists for today + this account
+    # Check if a row already exists for this trading date + account (duplicate start guard)
     for row in acc_data_rows[1:]:   # skip header
-        if row[0] == today and str(row[1]).strip() == account_id_str:
-            log_warn(f"  [START] Row already exists for {account_id_str} on {today}. "
+        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
+            log_warn(f"  [START] Row already exists for {account_id_str} on {trading_date}. "
                      f"Start run may have been triggered twice. Skipping.")
             return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'Start row already exists'}
 
     # No existing row found — safe to append
     # USER_ENTERED tells Google Sheets to parse values as if typed by a user,
     # so '1-Apr-26' is stored as a real date rather than plain text.
-    acc_data_ws.append_row([today, account_id_str, balance, equity, '', ''], value_input_option='USER_ENTERED')
-    log(f"  [START] New row written → {account_id_str} | Date: {today} | "
+    acc_data_ws.append_row([trading_date, account_id_str, balance, equity, '', ''], value_input_option='USER_ENTERED')
+    log(f"  [START] New row written → {account_id_str} | Date: {trading_date} | "
         f"StartdayBalance={balance}, StartdayEquity={equity}")
 
     return {'id': account_id_str, 'type': account_type, 'status': 'recorded'}
@@ -352,16 +366,18 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance
 
     Returns a result dict used for SMS reporting.
     """
-    yesterday      = get_date_str(datetime.now() - timedelta(days=1))
+    # End run at 3 PM MST on Apr 2 closes the trading day that started on Apr 1 at 4 PM.
+    # The start run wrote tomorrow's date (Apr 2), so end run looks for today's date (Apr 2).
+    trading_date   = get_date_str(datetime.now())
     account_id_str = str(account_id)
 
-    # Search Acc_data for a row matching yesterday's date and this account ID
+    # Search Acc_data for a row matching today's trading date and this account ID
     row_index = None
     start_balance = None
     start_equity  = None
 
     for i, row in enumerate(acc_data_rows[1:], start=2):  # gspread rows are 1-indexed; skip header
-        if row[0] == yesterday and str(row[1]).strip() == account_id_str:
+        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
             row_index     = i
             start_balance = parse_float(row[2])
             start_equity  = parse_float(row[3])
@@ -369,7 +385,7 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance
 
     if row_index is None:
         # Case 3: No start row found for yesterday — start run was likely missed
-        log_warn(f"  [END] No start row found for {account_id_str} on {yesterday}. "
+        log_warn(f"  [END] No start row found for {account_id_str} on {trading_date}. "
                  f"Start run may have been missed. Skipping.")
         return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'No start row found'}
 
@@ -379,12 +395,12 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance
 
     if existing_endday:
         # Case 2: End already recorded — overwrite with latest values
-        log_warn(f"  [END] EnddayBalance already exists for {account_id_str} on {yesterday}. "
+        log_warn(f"  [END] EnddayBalance already exists for {account_id_str} on {trading_date}. "
                  f"Overwriting with latest values.")
         status = 'overwritten'
     else:
         # Case 1: Normal end run — fill in end-of-day values
-        log(f"  [END] Row found for {account_id_str} on {yesterday} — filling end-of-day values.")
+        log(f"  [END] Row found for {account_id_str} on {trading_date} — filling end-of-day values.")
         status = 'recorded'
 
     # Write EnddayBalance (col 5) and EnddayEquity (col 6)
@@ -418,7 +434,11 @@ def fetch_account_info(run_type):
     acc_data_ws   = db.worksheet(ACC_DATA_SHEET)
     acc_data_rows = acc_data_ws.get_all_values()
 
-    run_date = get_date_str(datetime.now())
+    # run_date is used in SMS reports.
+    # For start: show tomorrow's date (the trading day being opened).
+    # For end: show today's date (the trading day being closed).
+    mst_now  = get_mst_time()
+    run_date = get_date_str(mst_now + timedelta(days=1)) if run_type == 'start' else get_date_str(mst_now)
 
     log("─" * 60)
     log(f"Run type : {run_type.upper()}")
