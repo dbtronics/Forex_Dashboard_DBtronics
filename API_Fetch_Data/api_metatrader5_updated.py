@@ -117,11 +117,12 @@ def get_credentials_from_sheet(client):
 
 def get_date_str(date):
     """
-    Format a date object into MM/DD/YYYY format, e.g. '04/01/2026'.
-    Google Sheets natively recognizes this as a real date value (not plain text),
-    allowing date-based sorting, filtering, and formatting in the sheet.
+    Format a date object into the Acc_data sheet format, e.g. '1-Apr-26'.
+    Uses %#d on Windows (no leading zero on day).
+    Written with value_input_option='USER_ENTERED' so Google Sheets stores
+    it as a real date value rather than plain text.
     """
-    return date.strftime('%m/%d/%Y')
+    return date.strftime('%#d-%b-%y')
 
 
 def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
