@@ -51,7 +51,7 @@ def get_credentials_from_sheet(client):
 
 def get_today_str():
     """Returns date string matching the Acc_data format, e.g. '1-Apr-26'."""
-    return datetime.now().strftime('%-d-%b-%y')
+    return datetime.now().strftime('%#d-%b-%y')
 
 
 def update_acc_data(acc_data_ws, acc_data_rows, account_id, balance, equity):
