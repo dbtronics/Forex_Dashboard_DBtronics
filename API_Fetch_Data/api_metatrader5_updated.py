@@ -108,27 +108,46 @@ def get_credentials_from_sheet(client):
     """
     Read MT5 login credentials from the Account sheet.
     Only returns accounts where Status column = 'Active'.
-    Columns used: ID (0), Password (1), Server (2), Status (7).
+
+    Column positions are resolved dynamically from the header row so that
+    reordering or adding columns in the sheet does not break the script.
+    Required columns: ID, Password, Server, Status.
     """
     ws   = client.open(SPREADSHEET_NAME).worksheet(ACCOUNT_SHEET)
     rows = ws.get_all_values()
 
+    if not rows:
+        log_warn("Account sheet is empty.")
+        return []
+
+    # Build a column index map from the header row
+    headers = [h.strip() for h in rows[0]]
+    col = {name: idx for idx, name in enumerate(headers)}
+    log(f"  Account sheet columns: {headers}")
+
+    # Validate required columns exist
+    required = ['ID', 'Password', 'Server', 'Status']
+    missing  = [c for c in required if c not in col]
+    if missing:
+        log_warn(f"  Missing required columns in Account sheet: {missing}. Cannot proceed.")
+        return []
+
     credentials = []
     for row in rows[1:]:        # skip header row
-        if not row[0].strip():  # skip empty rows
+        if not row[col['ID']].strip():  # skip empty rows
             continue
 
-        status = row[7].strip() if len(row) > 7 else ''
+        status = row[col['Status']].strip() if len(row) > col['Status'] else ''
 
         if status != 'Active':
             # Inactive, closed, or blank status accounts are ignored
-            log(f"  Skipping account {row[0].strip()} (Status: '{status}')")
+            log(f"  Skipping account {row[col['ID']].strip()} (Status: '{status}')")
             continue
 
         credentials.append({
-            'ID':       row[0].strip(),
-            'Password': row[1].strip(),
-            'Server':   row[2].strip(),
+            'ID':       row[col['ID']].strip(),
+            'Password': row[col['Password']].strip(),
+            'Server':   row[col['Server']].strip(),
         })
 
     return credentials
