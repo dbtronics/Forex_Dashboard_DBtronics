@@ -2,5 +2,7 @@ pandas==2.2.1
 pytz==2024.1
 gspread==6.2.1
 google-auth==2.49.1
+twilio==9.10.4
+python-dotenv==1.2.2
 MetaTrader5
 Flask
