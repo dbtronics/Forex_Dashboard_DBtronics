@@ -25,6 +25,7 @@
 
 import os
 import sys
+import logging
 from datetime import datetime, timedelta
 import MetaTrader5 as mt5
 import gspread
@@ -51,6 +52,30 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets',
 # # api_web.csv — commented out, kept for future Flask dashboard use
 # import pandas as pd
 # CSV_OUTPUT_PATH = os.path.join(SCRIPT_DIR, '..', 'api_web.csv')
+
+# ── Logging configuration ─────────────────────────────────────────────────────
+# Log file lives in the project root folder (one level up from this script).
+# It is excluded from git via *.log in .gitignore.
+# Each run appends to the same file so the full history is preserved.
+LOG_FILE = os.path.join(SCRIPT_DIR, '..', 'cron.log')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',  # e.g. 2026-04-01 16:00:01 [INFO] message
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),  # write to cron.log
+        logging.StreamHandler(sys.stdout)                 # also print to terminal
+    ]
+)
+
+def log(msg):
+    """Shorthand for logging.info — used throughout the script."""
+    logging.info(msg)
+
+def log_warn(msg):
+    """Shorthand for logging.warning."""
+    logging.warning(msg)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -78,7 +103,7 @@ def get_credentials_from_sheet(client):
 
         if status != 'Active':
             # Inactive, closed, or blank status accounts are ignored
-            print(f"  Skipping account {row[0].strip()} (Status: '{status}')")
+            log(f"  Skipping account {row[0].strip()} (Status: '{status}')")
             continue
 
         credentials.append({
@@ -112,8 +137,8 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
     account_id_str = str(account_id)
 
     acc_data_ws.append_row([today, account_id_str, balance, equity, '', ''])
-    print(f"  [START] New row written → {account_id_str} | Date: {today} | "
-          f"StartdayBalance={balance}, StartdayEquity={equity}")
+    log(f"  [START] New row written → {account_id_str} | Date: {today} | "
+        f"StartdayBalance={balance}, StartdayEquity={equity}")
 
 
 def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
@@ -142,8 +167,8 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
 
     if row_index is None:
         # Case 3: No start row found for yesterday — start run was likely missed
-        print(f"  [END] ⚠ WARNING: No start row found for {account_id_str} on {yesterday}. "
-              f"Start run may have been missed. Skipping.")
+        log_warn(f"  [END] No start row found for {account_id_str} on {yesterday}. "
+                 f"Start run may have been missed. Skipping.")
         return
 
     # Check if EnddayBalance is already filled (column index 4, 0-based)
@@ -151,16 +176,16 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
 
     if existing_endday:
         # Case 2: End already recorded — overwrite with latest values
-        print(f"  [END] ⚠ WARNING: EnddayBalance already exists for {account_id_str} on {yesterday}. "
-              f"Overwriting with latest values.")
+        log_warn(f"  [END] EnddayBalance already exists for {account_id_str} on {yesterday}. "
+                 f"Overwriting with latest values.")
     else:
         # Case 1: Normal end run — fill in end-of-day values
-        print(f"  [END] Row found for {account_id_str} on {yesterday} — filling end-of-day values.")
+        log(f"  [END] Row found for {account_id_str} on {yesterday} — filling end-of-day values.")
 
     # Write EnddayBalance (col 5) and EnddayEquity (col 6)
     acc_data_ws.update_cell(row_index, 5, balance)
     acc_data_ws.update_cell(row_index, 6, equity)
-    print(f"  [END] Done → {account_id_str} | EnddayBalance={balance}, EnddayEquity={equity}")
+    log(f"  [END] Done → {account_id_str} | EnddayBalance={balance}, EnddayEquity={equity}")
 
 
 def fetch_account_info(run_type):
@@ -178,23 +203,24 @@ def fetch_account_info(run_type):
     acc_data_ws   = db.worksheet(ACC_DATA_SHEET)
     acc_data_rows = acc_data_ws.get_all_values()
 
-    print(f"\nRun type : {run_type.upper()}")
-    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Active accounts found: {len(credentials)}\n")
+    log("─" * 60)
+    log(f"Run type : {run_type.upper()}")
+    log(f"Active accounts found: {len(credentials)}")
+    log("─" * 60)
 
     for cred in credentials:
         # Login to MT5 account — login ID must be an integer
         success = mt5.login(int(cred['ID']), cred['Password'], cred['Server'])
         if not success:
-            print(f"  MT5 login failed for {cred['ID']} — skipping")
+            log_warn(f"  MT5 login failed for {cred['ID']} — skipping")
             continue
 
         accountInfo = mt5.account_info()
         if accountInfo is None:
-            print(f"  Could not retrieve account info for {cred['ID']} — skipping")
+            log_warn(f"  Could not retrieve account info for {cred['ID']} — skipping")
             continue
 
-        print(f"Account: {accountInfo.login} | Balance: {accountInfo.balance} | Equity: {accountInfo.equity}")
+        log(f"Account: {accountInfo.login} | Balance: {accountInfo.balance} | Equity: {accountInfo.equity}")
 
         # Route to the correct handler based on run type
         if run_type == 'start':
@@ -202,11 +228,9 @@ def fetch_account_info(run_type):
         elif run_type == 'end':
             handle_end_run(acc_data_ws, acc_data_rows, cred['ID'], accountInfo.balance, accountInfo.equity)
 
-        print()
-
     # # ── api_web.csv for Flask dashboard (commented out for now) ──────────────
     # df_data.to_csv(CSV_OUTPUT_PATH, index=False, mode='w')
-    # print(f"api_web.csv written with {len(df_data)} accounts.")
+    # log(f"api_web.csv written with {len(df_data)} accounts.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -222,6 +246,9 @@ run_type = sys.argv[1]
 
 try:
     fetch_account_info(run_type)
-    print("Done.")
+    log("Run completed successfully.")
+except Exception as e:
+    log_warn(f"Script failed with error: {e}")
+    raise
 finally:
     mt5.shutdown()
