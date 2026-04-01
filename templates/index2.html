@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="refresh" content="60"> <!-- Refresh the page every 10 seconds -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forex-Dashboard</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<style>
+    .container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .block {
+        width: 1300px;
+        height: 200px;
+        margin: 20px;
+        background-color: #00000;
+        border: 1px solid #ccc;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .mini-block {
+        width: 150px;
+        height: 100px;
+        margin: 5px;
+        background-color: #ccc;
+        cursor: pointer;
+    }
+
+    .scrollable-table {
+        overflow-x: auto; /* Add horizontal scrollbar when content exceeds block width */
+        overflow-y: auto; /* Add vertical scrollbar when content exceeds block height */
+        max-height: 180px; /* Define maximum height for the block */
+        max-width: auto; /* Define maximum width for the block */
+    }
+
+</style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Challenge/Funded:</h2>
+        <div class="block" id="challengeBlock">
+            <!-- Mini blocks will be dynamically added here -->
+            <div class = 'scrollable-table'>
+                <table class='table'>
+                    <tr class='table_header'>
+                        {% for header in headings %}
+                        <th> {{ header }} </th>
+                        {% endfor %}
+                    </tr>
+                    {% for row in data %}
+                        {% if 'funded' in row or 'challenge' in row %}
+                        <tr class='table_row'>
+                            {% for value in row %}
+                                <td class='table_cell'> {{ value }} </td>
+                            {% endfor %}
+                        </tr>
+                        {% endif %}
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+    </div>
+
+<div class="container">
+    <h2>Live:</h2>
+    <div class="block" id="liveBlock">
+        <!-- Mini blocks will be dynamically added here -->
+        <div class = 'scrollable-table'>
+            <table class='table'>
+                <tr class='table_header'>
+                    {% for header in headings %}
+                    <th> {{ header }} </th>
+                    {% endfor %}
+                </tr>
+                {% for row in data %}
+                    {% if 'live' in row %}
+                    <tr class='table_row'>
+                        {% for value in row %}
+                            <td class='table_cell'> {{ value }} </td>
+                        {% endfor %}
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <h2>Demo:</h2>
+    <div class="block" id="demoBlock">
+        <!-- Mini tables will be dynamically added here -->
+        <div class = 'scrollable-table'>
+            <table class='table'>
+                <tr class='table_header'>
+                    {% for header in headings %}
+                    <th class='table_cell'> {{ header }} </th>
+                    {% endfor %}
+                </tr>
+                {% for row in data %}
+                    {% if 'demo' in row %}
+                    <tr class='table_row'>
+                        {% for value in row %}
+                            <td class='table_cell'> {{ value }} </td>
+                        {% endfor %}
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+</div>
+</body>

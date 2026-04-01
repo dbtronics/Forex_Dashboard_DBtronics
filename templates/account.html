@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Details</title>
+    <style>
+        /* CSS for styling */
+        .header {
+            font-weight: bold;
+            text-transform: capitalize;
+        }
+        .header-item {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Account Details</h1>
+    <div id="account-details">
+        <!-- Account details will be dynamically added here -->
+    </div>
+
+    <script>
+        // Retrieve the data from the URL query parameter
+        const queryString = window.location.search;
+        const urlParams = new URLSearchParams(queryString);
+        const accountData = decodeURIComponent(urlParams.get('data'));
+
+        // Split the account data into an array of lines
+        const accountDataLines = accountData.split('\n');
+
+        // Display the account data on the page
+        const accountDetailsDiv = document.getElementById('account-details');
+        accountDataLines.forEach(line => {
+            const headerValuePair = line.split(',');
+            const header = headerValuePair[0].trim();
+            const value = headerValuePair[1].trim();
+            const headerDiv = document.createElement('div');
+            headerDiv.classList.add('header-item');
+            headerDiv.innerHTML = `<span class="header">${header}:</span> ${value}`;
+            accountDetailsDiv.appendChild(headerDiv);
+        });
+    </script>
+</body>
+</html>

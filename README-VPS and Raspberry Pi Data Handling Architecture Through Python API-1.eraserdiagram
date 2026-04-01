@@ -1,0 +1,35 @@
+cloud-architecture-diagram
+
+title VPS and Raspberry Pi Data Handling Architecture Through Python API
+
+// User interaction
+User [icon: user]
+
+// VPS setup
+VPS [color: lightblue] {
+   Python Code [icon: code]
+   MT5 API [icon: database]
+   NextCloud VPS [icon: cloud]
+}
+
+// Raspberry Pi setup
+Raspberry Pi [color: lightgreen] {
+   NextCloud Pi [icon: cloud]
+   Flask Server [icon: flask]
+   Front End [icon: layout]
+}
+
+// Connections
+// Python Code connections
+Python Code < MT5 API : Data fetch
+Python Code > NextCloud VPS : Save to NextCloud VPS as api_web.csv
+
+// NextCloud connections
+NextCloud VPS > SYNC [icon: sync] > NextCloud Pi
+
+// Flask Server connections
+NextCloud Pi > Flask Server
+Flask Server > Front End
+
+// User to Front End connection
+User > Front End

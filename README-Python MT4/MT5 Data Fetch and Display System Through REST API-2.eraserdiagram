@@ -1,0 +1,35 @@
+cloud-architecture-diagram
+
+title Python MT4/MT5 Data Fetch and Display System Through REST API
+
+// Raspberry Pi as the central hosting device containing all services and the web application
+Raspberry Pi [icon: microchip, color: orange] {
+  // Python services handling data fetching and processing
+  Services [color: lightblue] {
+    MT4 Data Fetcher [icon: database]
+    MT5 Data Fetcher [icon: database]
+    Python Code [icon: cpu]
+  }
+
+  // Frontend web application
+  Web Application [color: lightgreen] {
+    Flask Server [icon: server]
+    Dynamic Webpage [icon: globe]
+  }
+}
+
+User [icon: user]
+
+// Connections
+// Fetch data from MT4 and MT5
+MT4 Data Fetcher > Python Code
+MT5 Data Fetcher > Python Code
+
+// Processed data to Flask server
+Python Code > Flask Server
+
+// Flask server handles HTTP requests and updates the web page
+Flask Server > Dynamic Webpage
+
+// User views information globally
+Dynamic Webpage > User

@@ -1,0 +1,45 @@
+cloud-architecture-diagram
+
+title Webpage Account Navigation Architecture
+
+// Main container for the entire webpage
+Webpage [color: lightgray] {
+  // Main containers for different account types with their specific accounts
+  Account Types [color: lightblue] {
+    Demo [icon: monitor] {
+      Demo Account 1 [icon: user-check]
+      Demo Account 2 [icon: user-check]
+    }
+    Live [icon: globe] {
+      Live Account 1 [icon: user-check]
+      Live Account 2 [icon: user-check]
+    }
+    Challenge_Funded [icon: dollar-sign] {
+      Challenge_Funded Account 1 [icon: user-check]
+      Challenge_Funded Account 2 [icon: user-check]
+    }
+  }
+
+  // Information pages linked from account types, split into specific types
+  Demo Information [color: lightcoral] {
+    Demo Info 1 [icon: file-text]
+    Demo Info 2 [icon: file-text]
+  }
+  Live Information [color: lightcoral] {
+    Live Info 1 [icon: file-text]
+    Live Info 2 [icon: file-text]
+  }
+  Challenge_Funded Information [color: lightcoral] {
+    Challenge_Funded Info 1 [icon: file-text]
+    Challenge_Funded Info 2 [icon: file-text]
+  }
+}
+
+// Connections
+// Demo to Demo Information
+Demo > Demo Information
+// Live to Live Information
+Live > Live Information
+// Challenge_Funded to Challenge_Funded Information
+Challenge_Funded > Challenge_Funded Information
+
