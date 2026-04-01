@@ -134,10 +134,21 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
       - Account ID
       - StartdayBalance and StartdayEquity (current MT5 values)
       - EnddayBalance and EnddayEquity left blank (filled by end run)
+
+    If a row for today + this account already exists (start ran twice),
+    it logs a warning and skips to prevent duplicate rows.
     """
     today          = get_date_str(datetime.now())
     account_id_str = str(account_id)
 
+    # Check if a row already exists for today + this account
+    for row in acc_data_rows[1:]:   # skip header
+        if row[0] == today and str(row[1]).strip() == account_id_str:
+            log_warn(f"  [START] Row already exists for {account_id_str} on {today}. "
+                     f"Start run may have been triggered twice. Skipping.")
+            return
+
+    # No existing row found — safe to append
     # USER_ENTERED tells Google Sheets to parse values as if typed by a user,
     # so '1-Apr-26' is stored as a real date rather than plain text.
     acc_data_ws.append_row([today, account_id_str, balance, equity, '', ''], value_input_option='USER_ENTERED')
