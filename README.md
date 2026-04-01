@@ -66,10 +66,12 @@ The script is invoked with a `start` or `end` argument that determines what gets
 
 | Argument | When to run | What it writes |
 |----------|-------------|----------------|
-| `start` | 4:00 PM MST daily | Appends a new row: `Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity` |
-| `end` | 3:00 PM MST next day | Finds yesterday's row and fills `EnddayBalance`, `EnddayEquity` |
+| `start` | 4:00 PM MST daily | Appends a new row using **tomorrow's date** as the trading day date, with `StartdayBalance` and `StartdayEquity` |
+| `end` | 3:00 PM MST next day | Finds **today's date** row and fills `EnddayBalance`, `EnddayEquity` |
 
-> The start and end runs fall on different calendar dates in MST (4 PM Day 1 → 3 PM Day 2), so the end run always looks for **yesterday's** row to find its matching start entry.
+> **Trading day date logic:** The start run fires at 4 PM MST on Day 1 but belongs to Day 2's trading session. It therefore writes Day 2 (tomorrow) as the date. The end run fires at 3 PM MST on Day 2 and looks for Day 2 (today) — both runs align on the same date. This ensures the start and end rows always match correctly.
+>
+> **Timezone:** The Windows server runs on CST. All timestamps in SMS reports are explicitly converted to MST via `pytz` regardless of the system timezone.
 
 **Edge cases handled:**
 
