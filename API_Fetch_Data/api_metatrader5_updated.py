@@ -153,6 +153,29 @@ def get_credentials_from_sheet(client):
     return credentials
 
 
+def parse_float(value):
+    """
+    Safely parse a value from Google Sheets into a float.
+    Handles plain numbers, currency-formatted strings, and empty values.
+
+    Examples handled:
+      '105220.2'     → 105220.2
+      '$105,220.20'  → 105220.2
+      '105,220.20'   → 105220.2
+      ''             → None
+      None           → None
+    """
+    if not value:
+        return None
+    try:
+        # Strip currency symbols, spaces, and thousand separators then convert
+        cleaned = str(value).replace('$', '').replace(',', '').strip()
+        return float(cleaned)
+    except ValueError:
+        log_warn(f"  Could not parse value as float: '{value}' — treating as None")
+        return None
+
+
 def get_date_str(date):
     """
     Format a date object into the Acc_data sheet format, e.g. '1-Apr-26'.
@@ -339,8 +362,8 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
     for i, row in enumerate(acc_data_rows[1:], start=2):  # gspread rows are 1-indexed; skip header
         if row[0] == yesterday and str(row[1]).strip() == account_id_str:
             row_index     = i
-            start_balance = float(row[2]) if row[2] else None
-            start_equity  = float(row[3]) if row[3] else None
+            start_balance = parse_float(row[2])
+            start_equity  = parse_float(row[3])
             break
 
     if row_index is None:
@@ -350,7 +373,8 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
         return {'id': account_id_str, 'status': 'skipped', 'reason': 'No start row found'}
 
     # Check if EnddayBalance is already filled (column index 4, 0-based)
-    existing_endday = acc_data_rows[row_index - 1][4]
+    # Use parse_float to handle any currency formatting Google Sheets may apply
+    existing_endday = parse_float(acc_data_rows[row_index - 1][4])
 
     if existing_endday:
         # Case 2: End already recorded — overwrite with latest values
