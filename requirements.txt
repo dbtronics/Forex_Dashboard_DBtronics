@@ -1,0 +1,6 @@
+pandas==2.2.1
+pytz==2024.1
+gspread==6.2.1
+google-auth==2.49.1
+MetaTrader5
+Flask
