@@ -148,6 +148,7 @@ def get_credentials_from_sheet(client):
             'ID':       row[col['ID']].strip(),
             'Password': row[col['Password']].strip(),
             'Server':   row[col['Server']].strip(),
+            'Type':     row[col['Type']].strip() if 'Type' in col and len(row) > col['Type'] else 'N/A',
         })
 
     return credentials
@@ -284,8 +285,8 @@ def build_end_performance_sms(run_date, results):
         "[Forex Dashboard] Daily Performance Report",
         f"Date: {run_date}",
         "",
-        f"{'Account':<15} {'Bal Delta':>10} {'Eq Delta':>10}",
-        f"{'-'*15} {'-'*10} {'-'*10}",
+        f"{'Account':<15} {'Type':<14} {'Bal Delta':>10} {'Eq Delta':>10}",
+        f"{'-'*15} {'-'*14} {'-'*10} {'-'*10}",
     ]
 
     for r in recorded:
@@ -295,12 +296,12 @@ def build_end_performance_sms(run_date, results):
         bal_str = f"+${bal_delta:,.2f}" if bal_delta >= 0 else f"-${abs(bal_delta):,.2f}"
         eq_str  = f"+${eq_delta:,.2f}"  if eq_delta  >= 0 else f"-${abs(eq_delta):,.2f}"
 
-        lines.append(f"{r['id']:<15} {bal_str:>10} {eq_str:>10}")
+        lines.append(f"{r['id']:<15} {r['type']:<14} {bal_str:>10} {eq_str:>10}")
 
     return "\n".join(lines)
 
 
-def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
+def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, balance, equity):
     """
     START run logic — called when script is invoked with 'start' argument.
 
@@ -323,7 +324,7 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
         if row[0] == today and str(row[1]).strip() == account_id_str:
             log_warn(f"  [START] Row already exists for {account_id_str} on {today}. "
                      f"Start run may have been triggered twice. Skipping.")
-            return {'id': account_id_str, 'status': 'skipped', 'reason': 'Start row already exists'}
+            return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'Start row already exists'}
 
     # No existing row found — safe to append
     # USER_ENTERED tells Google Sheets to parse values as if typed by a user,
@@ -332,10 +333,10 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
     log(f"  [START] New row written → {account_id_str} | Date: {today} | "
         f"StartdayBalance={balance}, StartdayEquity={equity}")
 
-    return {'id': account_id_str, 'status': 'recorded'}
+    return {'id': account_id_str, 'type': account_type, 'status': 'recorded'}
 
 
-def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
+def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance, equity):
     """
     END run logic — called when script is invoked with 'end' argument.
 
@@ -370,7 +371,7 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
         # Case 3: No start row found for yesterday — start run was likely missed
         log_warn(f"  [END] No start row found for {account_id_str} on {yesterday}. "
                  f"Start run may have been missed. Skipping.")
-        return {'id': account_id_str, 'status': 'skipped', 'reason': 'No start row found'}
+        return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'No start row found'}
 
     # Check if EnddayBalance is already filled (column index 4, 0-based)
     # Use parse_float to handle any currency formatting Google Sheets may apply
@@ -393,6 +394,7 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, balance, equity):
 
     return {
         'id':            account_id_str,
+        'type':          account_type,
         'status':        status,
         'start_balance': start_balance if start_balance is not None else balance,
         'start_equity':  start_equity  if start_equity  is not None else equity,
@@ -430,22 +432,22 @@ def fetch_account_info(run_type):
         success = mt5.login(int(cred['ID']), cred['Password'], cred['Server'])
         if not success:
             log_warn(f"  MT5 login failed for {cred['ID']} — skipping")
-            results.append({'id': cred['ID'], 'status': 'skipped', 'reason': 'MT5 login failed'})
+            results.append({'id': cred['ID'], 'type': cred['Type'], 'status': 'skipped', 'reason': 'MT5 login failed'})
             continue
 
         accountInfo = mt5.account_info()
         if accountInfo is None:
             log_warn(f"  Could not retrieve account info for {cred['ID']} — skipping")
-            results.append({'id': cred['ID'], 'status': 'skipped', 'reason': 'Could not retrieve account info'})
+            results.append({'id': cred['ID'], 'type': cred['Type'], 'status': 'skipped', 'reason': 'Could not retrieve account info'})
             continue
 
         log(f"Account: {accountInfo.login} | Balance: {accountInfo.balance} | Equity: {accountInfo.equity}")
 
         # Route to the correct handler based on run type and collect result
         if run_type == 'start':
-            result = handle_start_run(acc_data_ws, acc_data_rows, cred['ID'], accountInfo.balance, accountInfo.equity)
+            result = handle_start_run(acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], accountInfo.balance, accountInfo.equity)
         elif run_type == 'end':
-            result = handle_end_run(acc_data_ws, acc_data_rows, cred['ID'], accountInfo.balance, accountInfo.equity)
+            result = handle_end_run(acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], accountInfo.balance, accountInfo.equity)
 
         results.append(result)
 
