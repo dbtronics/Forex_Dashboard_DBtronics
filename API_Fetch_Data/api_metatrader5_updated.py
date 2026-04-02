@@ -25,7 +25,7 @@
 #     - If not found at all → logs a warning and skips (start run likely missed)
 #     - Sends two SMS messages:
 #         1. Run summary (total / recorded / skipped)
-#         2. Daily performance report (balance and equity delta per account)
+#         2. Daily analysis (challenge progress, funded status, real profit summary)
 
 import os
 import sys
@@ -374,47 +374,49 @@ def build_end_analysis_sms(run_date, results):
     challenges = [r for r in recorded if r['category'] == 'Challenge']
     if challenges:
         lines.append("")
-        lines.append("── Challenge Progress ──────────────────────")
+        lines.append("-- Challenge Progress --")
         for r in challenges:
             size = r['deposit_size']
+            lines.append("")  # blank line between each account for readability
             if size:
                 start_pct = ((r['start_balance'] - size) / size) * 100
                 end_pct   = ((r['end_balance']   - size) / size) * 100
                 start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
                 end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
 
-                lines.append(f"  {r['id']} (Size: ${size:,.0f})")
-                lines.append(f"  Day move : {start_str} → {end_str}")
+                lines.append(f"  {r['id']} (${size:,.0f})")
+                lines.append(f"  Move: {start_str} -> {end_str}")
 
                 if r['profit_target'] and r['profit_target'] > 0:
                     progress = (end_pct / r['profit_target']) * 100
-                    lines.append(f"  To target: {progress:.1f}% of {r['profit_target']:.0f}% target")
+                    lines.append(f"  Target: {progress:.1f}% of {r['profit_target']:.0f}%")
 
                 if r['daily_drawdown']:
-                    lines.append(f"  Daily DD : {r['daily_drawdown']:.2f}% limit")
+                    lines.append(f"  DD limit: {r['daily_drawdown']:.2f}%")
             else:
-                lines.append(f"  {r['id']} — account size not available")
+                lines.append(f"  {r['id']} - size not available")
 
     # ── Funded Status ─────────────────────────────────────────────────────────
     funded = [r for r in recorded if r['category'] == 'Funded']
     if funded:
         lines.append("")
-        lines.append("── Funded Status ───────────────────────────")
+        lines.append("-- Funded Status --")
         for r in funded:
             size = r['deposit_size']
+            lines.append("")  # blank line between each account for readability
             if size:
                 start_pct = ((r['start_balance'] - size) / size) * 100
                 end_pct   = ((r['end_balance']   - size) / size) * 100
                 start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
                 end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
 
-                lines.append(f"  {r['id']} (Size: ${size:,.0f})")
-                lines.append(f"  Day move : {start_str} → {end_str}")
+                lines.append(f"  {r['id']} (${size:,.0f})")
+                lines.append(f"  Move: {start_str} -> {end_str}")
 
                 if r['daily_drawdown']:
-                    lines.append(f"  Daily DD : {r['daily_drawdown']:.2f}% limit")
+                    lines.append(f"  DD limit: {r['daily_drawdown']:.2f}%")
             else:
-                lines.append(f"  {r['id']} — account size not available")
+                lines.append(f"  {r['id']} - size not available")
 
     # ── Real Profit Summary ───────────────────────────────────────────────────
     # Only Funded, LIVE $, and LIVE Cent$ count toward real profit.
@@ -429,12 +431,12 @@ def build_end_analysis_sms(run_date, results):
     total_real    = funded_profit + live_dollar + live_cent_usd
 
     lines.append("")
-    lines.append("── Real Profit Summary (USD) ───────────────")
-    lines.append(f"  Funded           : {fmt_delta(funded_profit)}")
-    lines.append(f"  Live Dollar ($)  : {fmt_delta(live_dollar)}")
-    lines.append(f"  Live Cent (÷100) : {fmt_delta(live_cent_usd)}")
-    lines.append(f"  {'─'*27}")
-    lines.append(f"  Total Real Profit: {fmt_delta(total_real)}")
+    lines.append("-- Real Profit Summary --")
+    lines.append(f"  Funded     : {fmt_delta(funded_profit)}")
+    lines.append(f"  Live $     : {fmt_delta(live_dollar)}")
+    lines.append(f"  Live c(÷100): {fmt_delta(live_cent_usd)}")
+    lines.append(f"  ---")
+    lines.append(f"  Total: {fmt_delta(total_real)}")
 
     return "\n".join(lines)
 
@@ -630,11 +632,11 @@ def fetch_account_info(run_type):
         log("Sending END summary SMS...")
         send_sms(build_end_summary_sms(run_date, results))
 
-        # SMS 2: per-account delta table
-        log("Sending END account deltas SMS...")
-        send_sms(build_end_performance_sms(run_date, results))
+        # SMS 2: per-account delta table (commented out — covered by analysis SMS below)
+        # log("Sending END account deltas SMS...")
+        # send_sms(build_end_performance_sms(run_date, results))
 
-        # SMS 3: challenge/funded analysis + real profit summary
+        # SMS 2: challenge/funded analysis + real profit summary
         log("Sending END analysis SMS...")
         send_sms(build_end_analysis_sms(run_date, results))
 

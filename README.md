@@ -130,17 +130,38 @@ Skipped accounts:
   - 512345 (No start row found)
 ```
 
-**Message 2: Daily performance report**
+**Message 2: Daily analysis**
 ```
-[Forex Dashboard] Daily Performance Report
+[Forex Dashboard] Daily Analysis
 Date: 1-Apr-26
 
-Account         Type           Bal Delta   Eq Delta
---------------- -------------- ---------- ----------
-541202045       Trader         +$220.20   +$220.20
-541202046       Copytrading    -$150.00   -$148.50
-541202047       Rider          +$0.00     +$12.30
+-- Challenge Progress --
+
+  541202045 ($100,000)
+  Move: +0.00% -> +2.20%
+  Target: 27.5% of 8%
+  DD limit: 5.00%
+
+  541202046 ($50,000)
+  Move: -1.00% -> +0.50%
+  Target: 6.3% of 8%
+  DD limit: 5.00%
+
+-- Funded Status --
+
+  541202047 ($200,000)
+  Move: +5.10% -> +5.32%
+  DD limit: 5.00%
+
+-- Real Profit Summary --
+  Funded     : +$440.00
+  Live $     : +$120.50
+  Live c(÷100): -$15.30
+  ---
+  Total: +$545.20
 ```
+
+> **Note:** A per-account delta table SMS was considered but is omitted since the daily analysis section already covers performance in full detail. The commented-out `build_end_performance_sms` function is retained in the code for potential future use.
 
 ---
 
