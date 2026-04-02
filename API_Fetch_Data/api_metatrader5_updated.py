@@ -249,6 +249,25 @@ def send_sms(body):
             log_warn(f"  Failed to send SMS to {number}: {e}")
 
 
+def append_status_to_row(acc_data_ws, acc_data_rows, trading_date, account_id_str, status_text):
+    """
+    Find the Acc_data row matching trading_date + account_id and append status_text
+    to the Status column (column 7). If the cell already has content (e.g. a START
+    status), the new text is appended with ' | ' so both runs are visible.
+
+    Called for end-run error cases where handle_end_run is never reached,
+    so we still want to record that the end run failed for this account.
+    """
+    for i, row in enumerate(acc_data_rows[1:], start=2):
+        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
+            existing = row[6].strip() if len(row) > 6 else ''
+            new_status = f"{existing} | {status_text}" if existing else status_text
+            acc_data_ws.update_cell(i, 7, new_status)
+            log(f"  Status updated for {account_id_str}: '{new_status}'")
+            return
+    log_warn(f"  No row found for {account_id_str} on {trading_date} — cannot update Status column.")
+
+
 def build_start_sms(run_date, results):
     """
     Build the SMS message for a START run.
@@ -448,15 +467,21 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, accou
     START run logic — called when script is invoked with 'start' argument.
 
     Appends a new row to Acc_data with:
-      - Today's date (MST local date at time of run)
+      - Trading date (tomorrow in MST — the session being opened)
       - Account ID
       - StartdayBalance and StartdayEquity (current MT5 values)
       - EnddayBalance and EnddayEquity left blank (filled by end run)
+      - Status: 'START: OK'
 
-    If a row for today + this account already exists (start ran twice),
-    it logs a warning and skips to prevent duplicate rows.
+    If a row for tomorrow + this account already exists (start ran twice),
+    it logs a warning and skips to prevent duplicate rows. The existing
+    row's Status is left unchanged.
 
     Returns a result dict used for SMS reporting.
+
+    Possible Status values written by this function:
+      'START: OK'        — balance & equity recorded successfully
+      'START: Duplicate' — row already existed; this run was skipped
     """
     # Start run at 4 PM MST opens the NEXT calendar day's trading session.
     # e.g. start runs on Apr 1 at 4 PM → trading day is Apr 2.
@@ -465,17 +490,25 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, accou
     account_id_str = str(account_id)
 
     # Check if a row already exists for this trading date + account (duplicate start guard)
-    for row in acc_data_rows[1:]:   # skip header
+    for i, row in enumerate(acc_data_rows[1:], start=2):
         if row[0] == trading_date and str(row[1]).strip() == account_id_str:
             log_warn(f"  [START] Row already exists for {account_id_str} on {trading_date}. "
                      f"Start run may have been triggered twice. Skipping.")
+            # Append 'START: Duplicate' to the existing status so it's visible in the sheet
+            existing = row[6].strip() if len(row) > 6 else ''
+            new_status = f"{existing} | START: Duplicate" if existing else 'START: Duplicate'
+            acc_data_ws.update_cell(i, 7, new_status)
             return {'id': account_id_str, 'type': account_type, 'category': account_category,
                     'status': 'skipped', 'reason': 'Start row already exists'}
 
-    # No existing row found — safe to append
+    # No existing row found — safe to append.
     # USER_ENTERED tells Google Sheets to parse values as if typed by a user,
     # so '1-Apr-26' is stored as a real date rather than plain text.
-    acc_data_ws.append_row([trading_date, account_id_str, balance, equity, '', ''], value_input_option='USER_ENTERED')
+    # Column 7 (Status) is set to 'START: OK' to confirm a clean start recording.
+    acc_data_ws.append_row(
+        [trading_date, account_id_str, balance, equity, '', '', 'START: OK'],
+        value_input_option='USER_ENTERED'
+    )
     log(f"  [START] New row written → {account_id_str} | Date: {trading_date} | "
         f"StartdayBalance={balance}, StartdayEquity={equity}")
 
@@ -533,16 +566,24 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account
         # Case 2: End already recorded — overwrite with latest values
         log_warn(f"  [END] EnddayBalance already exists for {account_id_str} on {trading_date}. "
                  f"Overwriting with latest values.")
-        status = 'overwritten'
+        status     = 'overwritten'
+        end_status = 'END: Overwritten'
     else:
         # Case 1: Normal end run — fill in end-of-day values
         log(f"  [END] Row found for {account_id_str} on {trading_date} — filling end-of-day values.")
-        status = 'recorded'
+        status     = 'recorded'
+        end_status = 'END: OK'
 
     # Write EnddayBalance (col 5) and EnddayEquity (col 6)
     acc_data_ws.update_cell(row_index, 5, balance)
     acc_data_ws.update_cell(row_index, 6, equity)
-    log(f"  [END] Done → {account_id_str} | EnddayBalance={balance}, EnddayEquity={equity}")
+
+    # Append end status to the Status column (col 7) — preserve the start run status already there
+    existing_status = acc_data_rows[row_index - 1][6].strip() if len(acc_data_rows[row_index - 1]) > 6 else ''
+    new_status = f"{existing_status} | {end_status}" if existing_status else end_status
+    acc_data_ws.update_cell(row_index, 7, new_status)
+
+    log(f"  [END] Done → {account_id_str} | EnddayBalance={balance}, EnddayEquity={equity} | Status: '{new_status}'")
 
     return {
         'id':            account_id_str,
@@ -594,6 +635,19 @@ def fetch_account_info(run_type):
             log_warn(f"  MT5 login failed for {cred['ID']} — skipping")
             results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
                             'status': 'skipped', 'reason': 'MT5 login failed'})
+            # Record the error in Acc_data so it's visible in the sheet:
+            #   START run → write a partial row (balance/equity blank) with error status
+            #   END run   → find existing row written by start run and append error status
+            if run_type == 'start':
+                trading_date = get_date_str(datetime.now() + timedelta(days=1))
+                acc_data_ws.append_row(
+                    [trading_date, str(cred['ID']), '', '', '', '', 'START: MT5 login failed'],
+                    value_input_option='USER_ENTERED'
+                )
+                log(f"  Partial error row written for {cred['ID']} on {trading_date}.")
+            else:
+                append_status_to_row(acc_data_ws, acc_data_rows, run_date, str(cred['ID']),
+                                     'END: MT5 login failed')
             continue
 
         accountInfo = mt5.account_info()
@@ -601,6 +655,17 @@ def fetch_account_info(run_type):
             log_warn(f"  Could not retrieve account info for {cred['ID']} — skipping")
             results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
                             'status': 'skipped', 'reason': 'Could not retrieve account info'})
+            # Same pattern — record error in sheet for visibility
+            if run_type == 'start':
+                trading_date = get_date_str(datetime.now() + timedelta(days=1))
+                acc_data_ws.append_row(
+                    [trading_date, str(cred['ID']), '', '', '', '', 'START: Account info error'],
+                    value_input_option='USER_ENTERED'
+                )
+                log(f"  Partial error row written for {cred['ID']} on {trading_date}.")
+            else:
+                append_status_to_row(acc_data_ws, acc_data_rows, run_date, str(cred['ID']),
+                                     'END: Account info error')
             continue
 
         log(f"Account: {accountInfo.login} | Balance: {accountInfo.balance} | Equity: {accountInfo.equity}")
