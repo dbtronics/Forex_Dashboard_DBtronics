@@ -133,12 +133,16 @@ def get_credentials_from_sheet(client):
         log_warn(f"  Missing required columns in Account sheet: {missing}. Cannot proceed.")
         return []
 
+    def safe_col(row, name):
+        """Return stripped cell value for a column name, or '' if missing."""
+        return row[col[name]].strip() if name in col and len(row) > col[name] else ''
+
     credentials = []
     for row in rows[1:]:        # skip header row
         if not row[col['ID']].strip():  # skip empty rows
             continue
 
-        status = row[col['Status']].strip() if len(row) > col['Status'] else ''
+        status = safe_col(row, 'Status')
 
         if status != 'Active':
             # Inactive, closed, or blank status accounts are ignored
@@ -146,13 +150,41 @@ def get_credentials_from_sheet(client):
             continue
 
         credentials.append({
-            'ID':       row[col['ID']].strip(),
-            'Password': row[col['Password']].strip(),
-            'Server':   row[col['Server']].strip(),
-            'Type':     row[col['Type']].strip() if 'Type' in col and len(row) > col['Type'] else 'N/A',
+            'ID':            row[col['ID']].strip(),
+            'Password':      row[col['Password']].strip(),
+            'Server':        row[col['Server']].strip(),
+            # Type: '$' or 'Cent$' — determines currency denomination of the account
+            'Type':          safe_col(row, 'Type'),
+            # Category: 'Funded', 'Challenge', or 'LIVE' — determines account class
+            'Category':      safe_col(row, 'Category'),
+            # Deposit/Size: account size in USD e.g. '$100,000' — base for % calculations
+            'DepositSize':   parse_float(safe_col(row, 'Deposit/Size')),
+            # Daily Drawdown: max daily loss allowed e.g. '5.00%'
+            'DailyDrawdown': parse_percent(safe_col(row, 'Daily Drawdown')),
+            # Profit Target: challenge completion target e.g. '8.00%' — blank for Funded
+            'ProfitTarget':  parse_percent(safe_col(row, 'Profit Target')),
         })
 
     return credentials
+
+
+def parse_percent(value):
+    """
+    Safely parse a percentage string from Google Sheets into a float.
+    Strips the '%' character before converting.
+
+    Examples:
+      '5.00%'  → 5.0
+      '8%'     → 8.0
+      ''       → None
+    """
+    if not value:
+        return None
+    try:
+        return float(str(value).replace('%', '').strip())
+    except ValueError:
+        log_warn(f"  Could not parse value as percent: '{value}' — treating as None")
+        return None
 
 
 def parse_float(value):
@@ -281,38 +313,131 @@ def build_end_summary_sms(run_date, results):
     return "\n".join(lines)
 
 
+def fmt_delta(value, is_cent=False):
+    """
+    Format a balance/equity delta value for display.
+    - Dollar accounts: prefix with + or - and $ symbol  e.g. +$220.20
+    - Cent accounts:   suffix with c                    e.g. +1230.00c
+    """
+    sign = '+' if value >= 0 else '-'
+    abs_val = abs(value)
+    if is_cent:
+        return f"{sign}{abs_val:,.2f}c"
+    return f"{sign}${abs_val:,.2f}"
+
+
 def build_end_performance_sms(run_date, results):
     """
-    Build SMS message 2 of 2 for an END run — the daily performance report.
+    Build SMS message 2 of 2 for an END run — the full daily performance report.
 
-    Content:
-      - Delta of Balance and Equity (end - start) per account
-      - Positive delta shown as +$x.xx, negative as -$x.xx
-      - Only accounts that were successfully recorded are included
+    Sections:
+      1. Per-account table (all recorded accounts)
+         - Cent$ accounts show delta with 'c' suffix instead of '$' prefix
+      2. Challenge Progress block
+         - Shows start % → end % relative to account size
+         - Shows progress toward profit target
+         - Shows daily drawdown limit
+      3. Funded Status block
+         - Shows start % → end % relative to account size
+         - Shows daily drawdown limit (no profit target for funded)
+      4. Real Profit Summary
+         - Funded:     balance delta as-is (USD)
+         - LIVE $:     balance delta as-is (USD)
+         - LIVE Cent$: balance delta ÷ 100 (converted to USD)
+         - Total real profit across all three
     """
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
 
+    # ── Section 1: Per-account delta table ───────────────────────────────────
     lines = [
         "[Forex Dashboard] Daily Performance Report",
         f"Date: {run_date}",
         "",
-        f"{'Account':<15} {'Type':<14} {'Bal Delta':>10} {'Eq Delta':>10}",
-        f"{'-'*15} {'-'*14} {'-'*10} {'-'*10}",
+        f"{'Account':<15} {'Type':<8} {'Category':<12} {'Bal Delta':>12} {'Eq Delta':>12}",
+        f"{'-'*15} {'-'*8} {'-'*12} {'-'*12} {'-'*12}",
     ]
 
     for r in recorded:
+        is_cent   = r['type'] == 'Cent$'
         bal_delta = r['end_balance'] - r['start_balance']
         eq_delta  = r['end_equity']  - r['start_equity']
+        lines.append(
+            f"{r['id']:<15} {r['type']:<8} {r['category']:<12} "
+            f"{fmt_delta(bal_delta, is_cent):>12} {fmt_delta(eq_delta, is_cent):>12}"
+        )
 
-        bal_str = f"+${bal_delta:,.2f}" if bal_delta >= 0 else f"-${abs(bal_delta):,.2f}"
-        eq_str  = f"+${eq_delta:,.2f}"  if eq_delta  >= 0 else f"-${abs(eq_delta):,.2f}"
+    # ── Section 2: Challenge Progress ────────────────────────────────────────
+    challenges = [r for r in recorded if r['category'] == 'Challenge']
+    if challenges:
+        lines.append("")
+        lines.append("── Challenge Progress ──────────────────────")
+        for r in challenges:
+            size = r['deposit_size']
+            if size:
+                start_pct = ((r['start_balance'] - size) / size) * 100
+                end_pct   = ((r['end_balance']   - size) / size) * 100
+                start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
+                end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
 
-        lines.append(f"{r['id']:<15} {r['type']:<14} {bal_str:>10} {eq_str:>10}")
+                lines.append(f"  {r['id']} (Size: ${size:,.0f})")
+                lines.append(f"  Day move : {start_str} → {end_str}")
+
+                # Progress toward profit target
+                if r['profit_target'] and r['profit_target'] > 0:
+                    progress = (end_pct / r['profit_target']) * 100
+                    lines.append(f"  To target: {progress:.1f}% of {r['profit_target']:.0f}% target")
+
+                if r['daily_drawdown']:
+                    lines.append(f"  Daily DD : {r['daily_drawdown']:.2f}% limit")
+            else:
+                lines.append(f"  {r['id']} — account size not available")
+
+    # ── Section 3: Funded Status ──────────────────────────────────────────────
+    funded = [r for r in recorded if r['category'] == 'Funded']
+    if funded:
+        lines.append("")
+        lines.append("── Funded Status ───────────────────────────")
+        for r in funded:
+            size = r['deposit_size']
+            if size:
+                start_pct = ((r['start_balance'] - size) / size) * 100
+                end_pct   = ((r['end_balance']   - size) / size) * 100
+                start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
+                end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
+
+                lines.append(f"  {r['id']} (Size: ${size:,.0f})")
+                lines.append(f"  Day move : {start_str} → {end_str}")
+
+                if r['daily_drawdown']:
+                    lines.append(f"  Daily DD : {r['daily_drawdown']:.2f}% limit")
+            else:
+                lines.append(f"  {r['id']} — account size not available")
+
+    # ── Section 4: Real Profit Summary ───────────────────────────────────────
+    # Only Funded, LIVE $, and LIVE Cent$ accounts count toward real profit.
+    # Cent$ balances are divided by 100 to convert to USD.
+    funded_profit    = sum(r['end_balance'] - r['start_balance']
+                           for r in recorded if r['category'] == 'Funded')
+    live_dollar      = sum(r['end_balance'] - r['start_balance']
+                           for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
+    live_cent_raw    = sum(r['end_balance'] - r['start_balance']
+                           for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
+    live_cent_usd    = live_cent_raw / 100
+    total_real       = funded_profit + live_dollar + live_cent_usd
+
+    lines.append("")
+    lines.append("── Real Profit Summary (USD) ───────────────")
+    lines.append(f"  Funded           : {fmt_delta(funded_profit)}")
+    lines.append(f"  Live Dollar ($)  : {fmt_delta(live_dollar)}")
+    lines.append(f"  Live Cent (÷100) : {fmt_delta(live_cent_usd)}")
+    lines.append(f"  {'─'*27}")
+    lines.append(f"  Total Real Profit: {fmt_delta(total_real)}")
 
     return "\n".join(lines)
 
 
-def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, balance, equity):
+def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, account_category,
+                     deposit_size, daily_drawdown, profit_target, balance, equity):
     """
     START run logic — called when script is invoked with 'start' argument.
 
@@ -338,7 +463,8 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, balan
         if row[0] == trading_date and str(row[1]).strip() == account_id_str:
             log_warn(f"  [START] Row already exists for {account_id_str} on {trading_date}. "
                      f"Start run may have been triggered twice. Skipping.")
-            return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'Start row already exists'}
+            return {'id': account_id_str, 'type': account_type, 'category': account_category,
+                    'status': 'skipped', 'reason': 'Start row already exists'}
 
     # No existing row found — safe to append
     # USER_ENTERED tells Google Sheets to parse values as if typed by a user,
@@ -347,10 +473,13 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, balan
     log(f"  [START] New row written → {account_id_str} | Date: {trading_date} | "
         f"StartdayBalance={balance}, StartdayEquity={equity}")
 
-    return {'id': account_id_str, 'type': account_type, 'status': 'recorded'}
+    return {'id': account_id_str, 'type': account_type, 'category': account_category,
+            'deposit_size': deposit_size, 'daily_drawdown': daily_drawdown,
+            'profit_target': profit_target, 'status': 'recorded'}
 
 
-def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance, equity):
+def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account_category,
+                   deposit_size, daily_drawdown, profit_target, balance, equity):
     """
     END run logic — called when script is invoked with 'end' argument.
 
@@ -387,7 +516,8 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance
         # Case 3: No start row found for yesterday — start run was likely missed
         log_warn(f"  [END] No start row found for {account_id_str} on {trading_date}. "
                  f"Start run may have been missed. Skipping.")
-        return {'id': account_id_str, 'type': account_type, 'status': 'skipped', 'reason': 'No start row found'}
+        return {'id': account_id_str, 'type': account_type, 'category': account_category,
+                'status': 'skipped', 'reason': 'No start row found'}
 
     # Check if EnddayBalance is already filled (column index 4, 0-based)
     # Use parse_float to handle any currency formatting Google Sheets may apply
@@ -411,6 +541,10 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, balance
     return {
         'id':            account_id_str,
         'type':          account_type,
+        'category':      account_category,
+        'deposit_size':  deposit_size,
+        'daily_drawdown': daily_drawdown,
+        'profit_target': profit_target,
         'status':        status,
         'start_balance': start_balance if start_balance is not None else balance,
         'start_equity':  start_equity  if start_equity  is not None else equity,
@@ -452,22 +586,32 @@ def fetch_account_info(run_type):
         success = mt5.login(int(cred['ID']), cred['Password'], cred['Server'])
         if not success:
             log_warn(f"  MT5 login failed for {cred['ID']} — skipping")
-            results.append({'id': cred['ID'], 'type': cred['Type'], 'status': 'skipped', 'reason': 'MT5 login failed'})
+            results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
+                            'status': 'skipped', 'reason': 'MT5 login failed'})
             continue
 
         accountInfo = mt5.account_info()
         if accountInfo is None:
             log_warn(f"  Could not retrieve account info for {cred['ID']} — skipping")
-            results.append({'id': cred['ID'], 'type': cred['Type'], 'status': 'skipped', 'reason': 'Could not retrieve account info'})
+            results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
+                            'status': 'skipped', 'reason': 'Could not retrieve account info'})
             continue
 
         log(f"Account: {accountInfo.login} | Balance: {accountInfo.balance} | Equity: {accountInfo.equity}")
 
         # Route to the correct handler based on run type and collect result
         if run_type == 'start':
-            result = handle_start_run(acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], accountInfo.balance, accountInfo.equity)
+            result = handle_start_run(
+                acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], cred['Category'],
+                cred['DepositSize'], cred['DailyDrawdown'], cred['ProfitTarget'],
+                accountInfo.balance, accountInfo.equity
+            )
         elif run_type == 'end':
-            result = handle_end_run(acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], accountInfo.balance, accountInfo.equity)
+            result = handle_end_run(
+                acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], cred['Category'],
+                cred['DepositSize'], cred['DailyDrawdown'], cred['ProfitTarget'],
+                accountInfo.balance, accountInfo.equity
+            )
 
         results.append(result)
 
