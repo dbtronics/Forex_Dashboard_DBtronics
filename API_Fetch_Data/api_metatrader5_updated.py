@@ -328,33 +328,17 @@ def fmt_delta(value, is_cent=False):
 
 def build_end_performance_sms(run_date, results):
     """
-    Build SMS message 2 of 2 for an END run — the full daily performance report.
-
-    Sections:
-      1. Per-account table (all recorded accounts)
-         - Cent$ accounts show delta with 'c' suffix instead of '$' prefix
-      2. Challenge Progress block
-         - Shows start % → end % relative to account size
-         - Shows progress toward profit target
-         - Shows daily drawdown limit
-      3. Funded Status block
-         - Shows start % → end % relative to account size
-         - Shows daily drawdown limit (no profit target for funded)
-      4. Real Profit Summary
-         - Funded:     balance delta as-is (USD)
-         - LIVE $:     balance delta as-is (USD)
-         - LIVE Cent$: balance delta ÷ 100 (converted to USD)
-         - Total real profit across all three
+    Build SMS message 2 of 3 for an END run — per-account delta table only.
+    Kept separate to stay within Twilio's 1600 character limit.
     """
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
 
-    # ── Section 1: Per-account delta table ───────────────────────────────────
     lines = [
-        "[Forex Dashboard] Daily Performance Report",
+        "[Forex Dashboard] Account Deltas",
         f"Date: {run_date}",
         "",
-        f"{'Account':<15} {'Type':<8} {'Category':<12} {'Bal Delta':>12} {'Eq Delta':>12}",
-        f"{'-'*15} {'-'*8} {'-'*12} {'-'*12} {'-'*12}",
+        f"{'Account':<15} {'Type':<6} {'Cat':<10} {'Bal Delta':>11} {'Eq Delta':>11}",
+        f"{'-'*15} {'-'*6} {'-'*10} {'-'*11} {'-'*11}",
     ]
 
     for r in recorded:
@@ -362,11 +346,31 @@ def build_end_performance_sms(run_date, results):
         bal_delta = r['end_balance'] - r['start_balance']
         eq_delta  = r['end_equity']  - r['start_equity']
         lines.append(
-            f"{r['id']:<15} {r['type']:<8} {r['category']:<12} "
-            f"{fmt_delta(bal_delta, is_cent):>12} {fmt_delta(eq_delta, is_cent):>12}"
+            f"{r['id']:<15} {r['type']:<6} {r['category']:<10} "
+            f"{fmt_delta(bal_delta, is_cent):>11} {fmt_delta(eq_delta, is_cent):>11}"
         )
 
-    # ── Section 2: Challenge Progress ────────────────────────────────────────
+    return "\n".join(lines)
+
+
+def build_end_analysis_sms(run_date, results):
+    """
+    Build SMS message 3 of 3 for an END run — challenge/funded analysis + real profit summary.
+    Kept separate to stay within Twilio's 1600 character limit.
+
+    Sections:
+      1. Challenge Progress — start%→end%, progress to target, daily DD limit
+      2. Funded Status     — start%→end%, daily DD limit (no profit target)
+      3. Real Profit Summary — Funded + LIVE$ + LIVE Cent$ (÷100) = Total USD profit
+    """
+    recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
+
+    lines = [
+        "[Forex Dashboard] Daily Analysis",
+        f"Date: {run_date}",
+    ]
+
+    # ── Challenge Progress ────────────────────────────────────────────────────
     challenges = [r for r in recorded if r['category'] == 'Challenge']
     if challenges:
         lines.append("")
@@ -382,7 +386,6 @@ def build_end_performance_sms(run_date, results):
                 lines.append(f"  {r['id']} (Size: ${size:,.0f})")
                 lines.append(f"  Day move : {start_str} → {end_str}")
 
-                # Progress toward profit target
                 if r['profit_target'] and r['profit_target'] > 0:
                     progress = (end_pct / r['profit_target']) * 100
                     lines.append(f"  To target: {progress:.1f}% of {r['profit_target']:.0f}% target")
@@ -392,7 +395,7 @@ def build_end_performance_sms(run_date, results):
             else:
                 lines.append(f"  {r['id']} — account size not available")
 
-    # ── Section 3: Funded Status ──────────────────────────────────────────────
+    # ── Funded Status ─────────────────────────────────────────────────────────
     funded = [r for r in recorded if r['category'] == 'Funded']
     if funded:
         lines.append("")
@@ -413,17 +416,17 @@ def build_end_performance_sms(run_date, results):
             else:
                 lines.append(f"  {r['id']} — account size not available")
 
-    # ── Section 4: Real Profit Summary ───────────────────────────────────────
-    # Only Funded, LIVE $, and LIVE Cent$ accounts count toward real profit.
+    # ── Real Profit Summary ───────────────────────────────────────────────────
+    # Only Funded, LIVE $, and LIVE Cent$ count toward real profit.
     # Cent$ balances are divided by 100 to convert to USD.
-    funded_profit    = sum(r['end_balance'] - r['start_balance']
-                           for r in recorded if r['category'] == 'Funded')
-    live_dollar      = sum(r['end_balance'] - r['start_balance']
-                           for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
-    live_cent_raw    = sum(r['end_balance'] - r['start_balance']
-                           for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
-    live_cent_usd    = live_cent_raw / 100
-    total_real       = funded_profit + live_dollar + live_cent_usd
+    funded_profit = sum(r['end_balance'] - r['start_balance']
+                        for r in recorded if r['category'] == 'Funded')
+    live_dollar   = sum(r['end_balance'] - r['start_balance']
+                        for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
+    live_cent_raw = sum(r['end_balance'] - r['start_balance']
+                        for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
+    live_cent_usd = live_cent_raw / 100
+    total_real    = funded_profit + live_dollar + live_cent_usd
 
     lines.append("")
     lines.append("── Real Profit Summary (USD) ───────────────")
@@ -623,13 +626,17 @@ def fetch_account_info(run_type):
         send_sms(sms)
 
     elif run_type == 'end':
-        # SMS 1: run summary
+        # SMS 1: run summary (total / recorded / skipped)
         log("Sending END summary SMS...")
         send_sms(build_end_summary_sms(run_date, results))
 
-        # SMS 2: daily performance report
-        log("Sending END performance report SMS...")
+        # SMS 2: per-account delta table
+        log("Sending END account deltas SMS...")
         send_sms(build_end_performance_sms(run_date, results))
+
+        # SMS 3: challenge/funded analysis + real profit summary
+        log("Sending END analysis SMS...")
+        send_sms(build_end_analysis_sms(run_date, results))
 
     # # ── api_web.csv for Flask dashboard (commented out for now) ──────────────
     # df_data.to_csv(CSV_OUTPUT_PATH, index=False, mode='w')
