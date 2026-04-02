@@ -379,8 +379,8 @@ def build_end_analysis_sms(run_date, results):
             size = r['deposit_size']
             lines.append("")  # blank line between each account for readability
             if size:
-                start_pct = ((r['start_balance'] - size) / size) * 100
-                end_pct   = ((r['end_balance']   - size) / size) * 100
+                start_pct = ((r['start_equity'] - size) / size) * 100
+                end_pct   = ((r['end_equity']   - size) / size) * 100
                 start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
                 end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
 
@@ -405,8 +405,8 @@ def build_end_analysis_sms(run_date, results):
             size = r['deposit_size']
             lines.append("")  # blank line between each account for readability
             if size:
-                start_pct = ((r['start_balance'] - size) / size) * 100
-                end_pct   = ((r['end_balance']   - size) / size) * 100
+                start_pct = ((r['start_equity'] - size) / size) * 100
+                end_pct   = ((r['end_equity']   - size) / size) * 100
                 start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
                 end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
 
@@ -420,12 +420,13 @@ def build_end_analysis_sms(run_date, results):
 
     # ── Real Profit Summary ───────────────────────────────────────────────────
     # Only Funded, LIVE $, and LIVE Cent$ count toward real profit.
-    # Cent$ balances are divided by 100 to convert to USD.
-    funded_profit = sum(r['end_balance'] - r['start_balance']
+    # Equity is used (not balance) to capture unrealised P&L.
+    # Cent$ equity deltas are divided by 100 to convert to USD.
+    funded_profit = sum(r['end_equity'] - r['start_equity']
                         for r in recorded if r['category'] == 'Funded')
-    live_dollar   = sum(r['end_balance'] - r['start_balance']
+    live_dollar   = sum(r['end_equity'] - r['start_equity']
                         for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
-    live_cent_raw = sum(r['end_balance'] - r['start_balance']
+    live_cent_raw = sum(r['end_equity'] - r['start_equity']
                         for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
     live_cent_usd = live_cent_raw / 100
     total_real    = funded_profit + live_dollar + live_cent_usd
