@@ -66,8 +66,8 @@ The script is invoked with a `start` or `end` argument that determines what gets
 
 | Argument | When to run | What it writes |
 |----------|-------------|----------------|
-| `start` | 4:00 PM MST daily | Appends a new row using **tomorrow's date** as the trading day date, with `StartdayBalance` and `StartdayEquity` |
-| `end` | 3:00 PM MST next day | Finds **today's date** row and fills `EnddayBalance`, `EnddayEquity` |
+| `start` | 4:00 PM MST daily | Appends a new row using **tomorrow's date** as the trading day date, with `StartdayBalance`, `StartdayEquity`, and a `Status` value |
+| `end` | 3:00 PM MST next day | Finds **today's date** row and fills `EnddayBalance`, `EnddayEquity`, and **appends** an end status to the existing `Status` cell |
 
 > **Trading day date logic:** The start run fires at 4 PM MST on Day 1 but belongs to Day 2's trading session. It therefore writes Day 2 (tomorrow) as the date. The end run fires at 3 PM MST on Day 2 and looks for Day 2 (today) — both runs align on the same date. This ensures the start and end rows always match correctly.
 >
@@ -77,9 +77,33 @@ The script is invoked with a `start` or `end` argument that determines what gets
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Start runs twice on the same day | Skips second run, logs a warning |
-| End runs and yesterday's row is missing | Logs a warning and skips (start was likely missed) |
-| End runs twice on the same day | Overwrites EnddayBalance/Equity with latest values, logs a warning |
+| Start runs twice on the same day | Skips second run; appends `START: Duplicate` to the existing row's Status |
+| End runs and today's row is missing | Logs a warning and skips (start was likely missed) |
+| End runs twice on the same day | Overwrites EnddayBalance/Equity with latest values; Status shows `END: Overwritten` |
+| MT5 login fails (start run) | Writes a partial row (balance/equity blank) with `START: MT5 login failed` |
+| MT5 login fails (end run) | Finds the existing start row and appends `END: MT5 login failed` to Status |
+| `account_info()` returns None (start run) | Writes a partial row with `START: Account info error` |
+| `account_info()` returns None (end run) | Appends `END: Account info error` to existing row's Status |
+
+**Status column values:**
+
+The `Status` column (column G) in `Acc_data` records what happened during each run. The start run writes the first value; the end run appends with ` | ` so both are visible in the same cell.
+
+| Value | Run | Meaning |
+|-------|-----|---------|
+| `START: OK` | start | Balance & equity recorded successfully |
+| `START: MT5 login failed` | start | Could not authenticate with MT5 |
+| `START: Account info error` | start | Logged in but `account_info()` returned None |
+| `START: Duplicate` | start | Row already existed; second start run skipped |
+| `END: OK` | end | End-of-day values recorded successfully |
+| `END: Overwritten` | end | End values already existed; overwritten with latest |
+| `END: MT5 login failed` | end | Could not authenticate with MT5 |
+| `END: Account info error` | end | Logged in but `account_info()` returned None |
+| `END: No start row` | end | No matching start row found; start run likely missed |
+
+Example cell after a clean day: `START: OK | END: OK`
+
+> **Setup note:** Add a `Status` header in column G of the `Acc_data` sheet. The script writes to column 7 by index so data lands correctly either way, but the header keeps the sheet readable.
 
 **Usage:**
 ```bash
@@ -87,7 +111,7 @@ python API_Fetch_Data/api_metatrader5_updated.py start
 python API_Fetch_Data/api_metatrader5_updated.py end
 ```
 
-**Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`)
+**Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`, `Status`)
 
 **Logging:** Every run appends to `cron.log` in the project root with timestamps, account-level results, and any warnings.
 
