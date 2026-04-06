@@ -113,6 +113,8 @@ python API_Fetch_Data/api_metatrader5_updated.py end
 
 **Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`, `Status`)
 
+> **Analysis calculations use equity, not balance.** All period performance figures (1d/2d/7d/14d/30d), challenge target progress, funded status moves, and the real profit summary are derived from equity values to include unrealised P&L.
+
 **Logging:** Every run appends to `cron.log` in the project root with timestamps, account-level results, and any warnings.
 
 ---
@@ -137,7 +139,7 @@ Skipped accounts:
   - 512345 (Start row already exists)
 ```
 
-#### END run — 2 SMS
+#### END run — 2 SMS (or more if analysis is large)
 
 **Message 1: Run summary**
 ```
@@ -155,6 +157,21 @@ Skipped accounts:
 ```
 
 **Message 2: Daily analysis**
+
+Shows multi-period equity performance for each account relative to its deposit size. All calculations use **equity** (not balance) to capture unrealised P&L.
+
+Each account displays five time periods:
+
+| Label | Period | Start equity sourced from |
+|-------|--------|--------------------------|
+| `1d` | Today only | Today's `StartdayEquity` |
+| `2d` | Last 2 days | Yesterday's `StartdayEquity` |
+| `7d` | Last 7 days | 6 days ago `StartdayEquity` |
+| `14d` | Last 14 days | 13 days ago `StartdayEquity` |
+| `30d` | Last 30 days | 29 days ago `StartdayEquity` |
+
+If fewer days of data exist than requested, the earliest available row is used and annotated with `[Xd]` (e.g. `[5d]` = only 5 days available).
+
 ```
 [Forex Dashboard] Daily Analysis
 Date: 1-Apr-26
@@ -162,20 +179,29 @@ Date: 1-Apr-26
 -- Challenge Progress --
 
   541202045 ($100,000)
-  Move: +0.00% -> +2.20%
+  1d:  +2.20% (+0.00% -> +2.20%)
+  2d:  +2.70% (-0.50% -> +2.20%)
+  7d:  +3.40% (-1.20% -> +2.20%) [5d]
+  14d: +3.40% (-1.20% -> +2.20%) [5d]
+  30d: +3.40% (-1.20% -> +2.20%) [5d]
   Target: 27.5% of 8%
-  DD limit: 5.00%
 
   541202046 ($50,000)
-  Move: -1.00% -> +0.50%
-  Target: 6.3% of 8%
-  DD limit: 5.00%
+  1d:  +2.50% (-1.00% -> +1.50%)
+  2d:  +3.10% (-1.60% -> +1.50%)
+  7d:  +3.10% (-1.60% -> +1.50%) [3d]
+  14d: +3.10% (-1.60% -> +1.50%) [3d]
+  30d: +3.10% (-1.60% -> +1.50%) [3d]
+  Target: 18.75% of 8%
 
 -- Funded Status --
 
   541202047 ($200,000)
-  Move: +5.10% -> +5.32%
-  DD limit: 5.00%
+  1d:  +0.11% (+5.10% -> +5.21%)
+  2d:  +0.39% (+4.82% -> +5.21%)
+  7d:  +1.21% (+4.00% -> +5.21%) [6d]
+  14d: +1.21% (+4.00% -> +5.21%) [6d]
+  30d: +1.21% (+4.00% -> +5.21%) [6d]
 
 -- Real Profit Summary --
   Funded     : +$440.00
@@ -185,7 +211,16 @@ Date: 1-Apr-26
   Total: +$545.20
 ```
 
-> **Note:** A per-account delta table SMS was considered but is omitted since the daily analysis section already covers performance in full detail. The commented-out `build_end_performance_sms` function is retained in the code for potential future use.
+If the analysis exceeds Twilio's 1600 character limit, it is automatically split into numbered parts sent as separate SMS messages:
+
+```
+[Forex Dashboard] Daily Analysis (1/2)   ← challenge accounts
+[Forex Dashboard] Daily Analysis (2/2)   ← funded accounts + profit summary
+```
+
+> **Notes:**
+> - The per-account delta table SMS (`build_end_performance_sms`) is commented out — the multi-period analysis covers this in greater detail. The function is retained in code for potential future use.
+> - The `[Xd]` annotation only appears when fewer days exist than the period label requests. A clean `7d` line with no annotation means a full 7 days of history was found.
 
 ---
 
