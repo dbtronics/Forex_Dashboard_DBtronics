@@ -470,8 +470,8 @@ def build_end_analysis_sms(run_date, results, acc_data_rows):
         net_pct   = end_pct - start_pct
         end_str   = pct_str(end_pct)
 
-        # net line — today's start → end
-        blk.append(f"  {'net:':<5}{pct_str(net_pct)} ({pct_str(start_pct)} -> {end_str})")
+        # 1d line — today's start → end
+        blk.append(f"  {'1d:':<5}{pct_str(net_pct)} ({pct_str(start_pct)} -> {end_str})")
 
         # Multi-period lines — look up historical StartdayEquity from Acc_data
         for n_days, label in PERIODS:
