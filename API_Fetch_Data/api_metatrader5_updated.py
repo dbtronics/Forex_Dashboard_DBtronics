@@ -268,6 +268,56 @@ def append_status_to_row(acc_data_ws, acc_data_rows, trading_date, account_id_st
     log_warn(f"  No row found for {account_id_str} on {trading_date} — cannot update Status column.")
 
 
+def get_period_start_equity(acc_data_rows, account_id_str, today_date_obj, n_days):
+    """
+    Look up the StartdayEquity for an account from n_days ago.
+
+    For a period of n_days, the target start date is today - (n_days - 1).
+      e.g. n_days=2  → yesterday
+           n_days=7  → 6 days ago
+           n_days=14 → 13 days ago
+           n_days=30 → 29 days ago
+
+    If the exact target date is not found in Acc_data (account didn't exist yet
+    or that day's data is missing), falls back to the earliest available row for
+    that account and reports the actual number of days that row covers.
+
+    Returns:
+      (equity_value, actual_days)  — actual_days < n_days signals a [Xd] annotation
+      (None, 0)                    — no history exists at all for this account
+    """
+    target_date = (today_date_obj - timedelta(days=n_days - 1)).date()
+
+    # Collect all rows for this account that have a parseable date and start equity.
+    # Dates in Acc_data are written as '6-Apr-26' by get_date_str().
+    account_rows = []
+    for row in acc_data_rows[1:]:
+        if str(row[1]).strip() != account_id_str:
+            continue
+        try:
+            row_date = datetime.strptime(row[0].strip(), '%d-%b-%y').date()
+            equity   = parse_float(row[3])   # StartdayEquity is column index 3 (0-based)
+            if equity is not None:
+                account_rows.append((row_date, equity))
+        except (ValueError, IndexError):
+            continue
+
+    if not account_rows:
+        return None, 0
+
+    account_rows.sort(key=lambda x: x[0])
+
+    # Try to find the exact target date first
+    for row_date, equity in account_rows:
+        if row_date == target_date:
+            return equity, n_days
+
+    # Exact date not found — use the earliest available row and report actual coverage
+    earliest_date, earliest_equity = account_rows[0]
+    actual_days = (today_date_obj.date() - earliest_date).days + 1
+    return earliest_equity, actual_days
+
+
 def build_start_sms(run_date, results):
     """
     Build the SMS message for a START run.
@@ -372,70 +422,96 @@ def build_end_performance_sms(run_date, results):
     return "\n".join(lines)
 
 
-def build_end_analysis_sms(run_date, results):
+def build_end_analysis_sms(run_date, results, acc_data_rows):
     """
-    Build SMS message 3 of 3 for an END run — challenge/funded analysis + real profit summary.
-    Kept separate to stay within Twilio's 1600 character limit.
+    Build SMS message(s) for an END run — multi-period analysis per account
+    + real profit summary. Returns a LIST of strings so each part stays within
+    Twilio's 1600 character limit. Caller sends each part as a separate SMS.
+
+    Per-account format:
+      net: today's net % gain  (start% -> end%, both relative to deposit size)
+      2d / 7d / 14d / 30d: net % gain over the period (start% -> end%)
+        [Xd] annotation shown when fewer days of data exist than requested
 
     Sections:
-      1. Challenge Progress — start%→end%, progress to target, daily DD limit
-      2. Funded Status     — start%→end%, daily DD limit (no profit target)
-      3. Real Profit Summary — Funded + LIVE$ + LIVE Cent$ (÷100) = Total USD profit
+      1. Challenge Progress — net + multi-period + profit target
+      2. Funded Status     — net + multi-period (no target)
+      3. Real Profit Summary — Funded + LIVE$ + LIVE Cent$ (÷100)
     """
+    MAX_CHARS = 1580   # leave a little buffer for the (X/Y) part suffix
+    PERIODS   = [(2, '2d'), (7, '7d'), (14, '14d'), (30, '30d')]
+
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
 
-    lines = [
-        "[Forex Dashboard] Daily Analysis",
-        f"Date: {run_date}",
-    ]
+    # Parse run_date string back to a date object for period arithmetic
+    try:
+        today_date_obj = datetime.strptime(run_date, '%d-%b-%y')
+    except ValueError:
+        today_date_obj = get_mst_time().replace(tzinfo=None)
 
-    # ── Challenge Progress ────────────────────────────────────────────────────
+    def pct_str(v):
+        """Format a percentage value with explicit +/- sign."""
+        return f"{'+' if v >= 0 else ''}{v:.2f}%"
+
+    def account_lines(r):
+        """Build the line block for a single account."""
+        size           = r['deposit_size']
+        account_id_str = r['id']
+        blk            = [""]   # blank separator before each account block
+
+        if not size:
+            blk.append(f"  {account_id_str} - size not available")
+            return blk
+
+        blk.append(f"  {account_id_str} (${size:,.0f})")
+
+        end_pct   = ((r['end_equity']   - size) / size) * 100
+        start_pct = ((r['start_equity'] - size) / size) * 100
+        net_pct   = end_pct - start_pct
+        end_str   = pct_str(end_pct)
+
+        # net line — today's start → end
+        blk.append(f"  {'net:':<5}{pct_str(net_pct)} ({pct_str(start_pct)} -> {end_str})")
+
+        # Multi-period lines — look up historical StartdayEquity from Acc_data
+        for n_days, label in PERIODS:
+            eq, actual = get_period_start_equity(
+                acc_data_rows, account_id_str, today_date_obj, n_days
+            )
+            if eq is None:
+                blk.append(f"  {label+':':<5}no data")
+                continue
+            period_start_pct = ((eq - size) / size) * 100
+            period_net_pct   = end_pct - period_start_pct
+            annotation       = f" [{actual}d]" if actual < n_days else ""
+            blk.append(
+                f"  {label+':':<5}{pct_str(period_net_pct)} "
+                f"({pct_str(period_start_pct)} -> {end_str}){annotation}"
+            )
+
+        # Profit target progress (challenge accounts only)
+        if r['category'] == 'Challenge' and r.get('profit_target') and r['profit_target'] > 0:
+            progress = (end_pct / r['profit_target']) * 100
+            blk.append(f"  Target: {progress:.1f}% of {r['profit_target']:.0f}%")
+
+        return blk
+
+    # ── Build content as a list of segments ───────────────────────────────────
+    # Each segment is a list of lines. Segments are packed greedily into SMS
+    # parts — a segment is never split across two parts.
+    segments = []
+
     challenges = [r for r in recorded if r['category'] == 'Challenge']
     if challenges:
-        lines.append("")
-        lines.append("-- Challenge Progress --")
+        segments.append(["", "-- Challenge Progress --"])
         for r in challenges:
-            size = r['deposit_size']
-            lines.append("")  # blank line between each account for readability
-            if size:
-                start_pct = ((r['start_equity'] - size) / size) * 100
-                end_pct   = ((r['end_equity']   - size) / size) * 100
-                start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
-                end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
+            segments.append(account_lines(r))
 
-                lines.append(f"  {r['id']} (${size:,.0f})")
-                lines.append(f"  Move: {start_str} -> {end_str}")
-
-                if r['profit_target'] and r['profit_target'] > 0:
-                    progress = (end_pct / r['profit_target']) * 100
-                    lines.append(f"  Target: {progress:.1f}% of {r['profit_target']:.0f}%")
-
-                if r['daily_drawdown']:
-                    lines.append(f"  DD limit: {r['daily_drawdown']:.2f}%")
-            else:
-                lines.append(f"  {r['id']} - size not available")
-
-    # ── Funded Status ─────────────────────────────────────────────────────────
     funded = [r for r in recorded if r['category'] == 'Funded']
     if funded:
-        lines.append("")
-        lines.append("-- Funded Status --")
+        segments.append(["", "-- Funded Status --"])
         for r in funded:
-            size = r['deposit_size']
-            lines.append("")  # blank line between each account for readability
-            if size:
-                start_pct = ((r['start_equity'] - size) / size) * 100
-                end_pct   = ((r['end_equity']   - size) / size) * 100
-                start_str = f"{'+' if start_pct >= 0 else ''}{start_pct:.2f}%"
-                end_str   = f"{'+' if end_pct   >= 0 else ''}{end_pct:.2f}%"
-
-                lines.append(f"  {r['id']} (${size:,.0f})")
-                lines.append(f"  Move: {start_str} -> {end_str}")
-
-                if r['daily_drawdown']:
-                    lines.append(f"  DD limit: {r['daily_drawdown']:.2f}%")
-            else:
-                lines.append(f"  {r['id']} - size not available")
+            segments.append(account_lines(r))
 
     # ── Real Profit Summary ───────────────────────────────────────────────────
     # Only Funded, LIVE $, and LIVE Cent$ count toward real profit.
@@ -450,15 +526,57 @@ def build_end_analysis_sms(run_date, results):
     live_cent_usd = live_cent_raw / 100
     total_real    = funded_profit + live_dollar + live_cent_usd
 
-    lines.append("")
-    lines.append("-- Real Profit Summary --")
-    lines.append(f"  Funded     : {fmt_delta(funded_profit)}")
-    lines.append(f"  Live $     : {fmt_delta(live_dollar)}")
-    lines.append(f"  Live c(÷100): {fmt_delta(live_cent_usd)}")
-    lines.append(f"  ---")
-    lines.append(f"  Total: {fmt_delta(total_real)}")
+    segments.append([
+        "",
+        "-- Real Profit Summary --",
+        f"  Funded     : {fmt_delta(funded_profit)}",
+        f"  Live $     : {fmt_delta(live_dollar)}",
+        f"  Live c(÷100): {fmt_delta(live_cent_usd)}",
+        f"  ---",
+        f"  Total: {fmt_delta(total_real)}",
+    ])
 
-    return "\n".join(lines)
+    # ── Pack segments into SMS parts (greedy, max MAX_CHARS each) ────────────
+    base_header = f"[Forex Dashboard] Daily Analysis\nDate: {run_date}"
+
+    # Try to fit everything into a single SMS first
+    all_lines = [base_header]
+    for seg in segments:
+        all_lines.extend(seg)
+    if len("\n".join(all_lines)) <= MAX_CHARS:
+        return ["\n".join(all_lines)]
+
+    # Doesn't fit — greedily pack: flush current part when next segment won't fit
+    parts         = []
+    current_lines = [base_header]
+
+    for seg in segments:
+        candidate = current_lines + seg
+        if len("\n".join(candidate)) <= MAX_CHARS:
+            current_lines = candidate
+        else:
+            # Flush the current part (only if it has content beyond the bare header)
+            if len(current_lines) > 1:
+                parts.append("\n".join(current_lines))
+            # Start a new part with this segment
+            current_lines = [base_header] + seg
+
+    if len(current_lines) > 1:
+        parts.append("\n".join(current_lines))
+
+    # Add (X/N) numbering to each part's header line
+    if len(parts) > 1:
+        total = len(parts)
+        parts = [
+            p.replace(
+                "[Forex Dashboard] Daily Analysis",
+                f"[Forex Dashboard] Daily Analysis ({i+1}/{total})",
+                1   # replace only the first occurrence
+            )
+            for i, p in enumerate(parts)
+        ]
+
+    return parts if parts else [base_header]
 
 
 def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, account_category,
@@ -702,9 +820,13 @@ def fetch_account_info(run_type):
         # log("Sending END account deltas SMS...")
         # send_sms(build_end_performance_sms(run_date, results))
 
-        # SMS 2: challenge/funded analysis + real profit summary
-        log("Sending END analysis SMS...")
-        send_sms(build_end_analysis_sms(run_date, results))
+        # SMS 2: challenge/funded multi-period analysis + real profit summary
+        # May be split into multiple parts if content exceeds 1600 chars
+        analysis_parts = build_end_analysis_sms(run_date, results, acc_data_rows)
+        log(f"Sending END analysis SMS ({len(analysis_parts)} part(s))...")
+        for i, part in enumerate(analysis_parts, 1):
+            log(f"  Sending analysis part {i}/{len(analysis_parts)}...")
+            send_sms(part)
 
     # # ── api_web.csv for Flask dashboard (commented out for now) ──────────────
     # df_data.to_csv(CSV_OUTPUT_PATH, index=False, mode='w')
