@@ -21,6 +21,7 @@ Forex_Dashboard_DBtronics/
 │   └── account.html                # Per-account detail view (inactive)
 ├── static/
 │   └── styles.css                  # Dashboard table styling
+├── TransactionHistory.py           # MT5 deal history exporter (Google Sheets)
 ├── UI_flask.py                     # Flask web application
 ├── requirements.txt                # Python dependencies
 ├── .env                            # Twilio credentials and SMS recipients (excluded from git)
@@ -224,7 +225,75 @@ If the analysis exceeds Twilio's 1600 character limit, it is automatically split
 
 ---
 
-### 3. `UI_flask.py` — Flask Web Dashboard
+### 3. `TransactionHistory.py` — Deal History Exporter
+
+Exports MT5 deal history for all active accounts to Google Sheets (`STS Transaction History`). Runs daily at 3:15 PM MST — 15 minutes after the `end` run — so end-of-day balances and any final trades are captured.
+
+**How it works:**
+
+Credentials are read from the same `Account` sheet in `STS Database` (same dynamic column resolution, `Status = Active` filter) as `api_metatrader5_updated.py`. All active accounts are processed.
+
+Each account gets its own tab in `STS Transaction History`, named by the MT5 account login number (e.g. `541202045`).
+
+**Run modes determined by tab existence:**
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Tab not found (first run) | Creates tab, writes header, backfills last **30 days** of deals |
+| Tab found (subsequent runs) | Fetches last **2 days** from MT5 (yesterday + today), deduplicates, appends new only |
+
+**Deduplication logic (subsequent runs):**
+
+Ticket number is MT5's unique primary key for deals — used as the sole deduplication key. A date-based window (last **3 days** of sheet rows) is scanned for existing tickets rather than a fixed row count, making it reliable regardless of trade frequency (scalper vs. swing trader).
+
+```
+MT5 fetch:  yesterday 00:00 → today 23:59  (2 days)
+Sheet scan: last 3 days of rows → extract existing ticket numbers
+Result:     only deals with unseen ticket numbers are appended
+```
+
+Fetching 2 days (instead of today only) ensures deals placed after the previous 3:15 PM run are captured on the next run.
+
+**Data written per deal** (all deal types included — BALANCE and CREDIT are essential):
+
+| Column | Description |
+|--------|-------------|
+| Date | Deal date (`YYYY.MM.DD`) |
+| Account Number | MT5 login number |
+| Ticket | Unique deal ID (deduplication key) |
+| Position ID | Links entry and exit deals for the same trade |
+| Symbol | Instrument traded (e.g. EURUSD) |
+| Type | BUY, SELL, BALANCE, CREDIT |
+| Entry/Exit | ENTRY, EXIT, REVERSAL, CLOSE_BY |
+| Magic Number | EA identifier (0 = manual trade) |
+| Manual Trade | YES if magic == 0, NO otherwise |
+| Comment | MT5 deal comment |
+| Open Time / Close Time | Timestamps for entry and exit |
+| Duration (s) | Seconds position was open |
+| Entry Price / Exit Price | Prices at open and close |
+| SL / TP | Stop loss and take profit levels |
+| Lot Size | Volume traded |
+| Balance at Export | Account balance at time of script run |
+| Equity at Export | Account equity at time of script run |
+| Profit / Commission / Swap / Net Profit | Full P&L breakdown |
+
+**Key constants (top of file):**
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `HISTORY_DAYS` | 30 | Days backfilled on first run |
+| `INCREMENTAL_DAYS` | 2 | Days fetched from MT5 on subsequent runs |
+| `DEDUP_DAYS` | 3 | Days of sheet rows scanned for duplicate ticket check |
+
+**Output:** `STS Transaction History` Google Spreadsheet — one tab per account number.
+
+**Logging:** Appends to the same `cron.log` as `api_metatrader5_updated.py`.
+
+> **Setup note:** Share the `STS Transaction History` spreadsheet with the same service account email from the JSON key file, just as you did for `STS Database`.
+
+---
+
+### 4. `UI_flask.py` — Flask Web Dashboard
 
 A lightweight Flask application that serves a browser-based dashboard displaying live MT5 account data.
 
@@ -283,12 +352,13 @@ SMS_RECIPIENTS=+1xxxxxxxxxx,+1xxxxxxxxxx
 
 ## Windows Task Scheduler Setup
 
-To run the updated script automatically twice a day:
+Three scripts run automatically via Windows Task Scheduler:
 
 | Task | Time | Command |
 |------|------|---------|
-| Forex Start Run | 4:00 PM daily | `python API_Fetch_Data\api_metatrader5_updated.py start` |
-| Forex End Run | 3:00 PM daily | `python API_Fetch_Data\api_metatrader5_updated.py end` |
+| Forex Start Run | 4:00 PM MST daily | `python API_Fetch_Data\api_metatrader5_updated.py start` |
+| Forex End Run | 3:00 PM MST daily | `python API_Fetch_Data\api_metatrader5_updated.py end` |
+| Transaction History | 3:15 PM MST daily | `python TransactionHistory.py` |
 
 Set the **Start in** directory to:
 ```
