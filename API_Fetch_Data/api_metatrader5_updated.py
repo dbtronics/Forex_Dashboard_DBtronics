@@ -217,7 +217,8 @@ def parse_sheet_date(date_str):
 
     Google Sheets may return dates in multiple formats depending on the cell's
     number format and whether the value was stored as a date serial or text:
-      '2-Jun-26'   → d-mmm-yy   (expected format)
+      '2-Jun-26'   → d-mmm-yy   (abbreviated month)
+      '2-June-26'  → d-mmmm-yy  (full month name — Google Sheets returns this for June)
       '6/2/2026'   → M/d/yyyy   (US locale default)
       '6/2/26'     → M/d/yy
       '2026-06-02' → ISO
@@ -228,7 +229,7 @@ def parse_sheet_date(date_str):
     s = str(date_str).strip()
     if not s:
         return None
-    for fmt in ('%d-%b-%y', '%m/%d/%Y', '%m/%d/%y', '%Y-%m-%d', '%d/%m/%Y'):
+    for fmt in ('%d-%b-%y', '%d-%B-%y', '%m/%d/%Y', '%m/%d/%y', '%Y-%m-%d', '%d/%m/%Y'):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
