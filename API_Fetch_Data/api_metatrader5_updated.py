@@ -31,6 +31,7 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+import time
 import pytz
 import MetaTrader5 as mt5
 import gspread
@@ -802,6 +803,7 @@ def fetch_account_info(run_type):
                 accountInfo.balance, accountInfo.equity
             )
 
+        time.sleep(5)
         results.append(result)
 
     # ── Send SMS notifications ────────────────────────────────────────────────

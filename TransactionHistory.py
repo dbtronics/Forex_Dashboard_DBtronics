@@ -32,6 +32,7 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+import time
 import pytz
 import MetaTrader5 as mt5
 import gspread
@@ -439,6 +440,7 @@ def export_account(dest_wb, cred):
             rows = deals_to_rows(new_deals, account_num, balance, equity)
             ws.append_rows(rows, value_input_option='USER_ENTERED')
             log(f"  Written {len(rows)} rows to tab '{account_num}'.")
+            time.sleep(5)
         else:
             log(f"  Nothing new to write for account {account_num}.")
 
