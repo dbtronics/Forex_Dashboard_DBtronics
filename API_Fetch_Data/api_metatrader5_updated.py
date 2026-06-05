@@ -211,6 +211,38 @@ def parse_float(value):
         return None
 
 
+def parse_sheet_date(date_str):
+    """
+    Parse a date value returned by gspread get_all_values() into a date object.
+
+    Google Sheets may return dates in multiple formats depending on the cell's
+    number format and whether the value was stored as a date serial or text:
+      '2-Jun-26'   → d-mmm-yy   (expected format)
+      '6/2/2026'   → M/d/yyyy   (US locale default)
+      '6/2/26'     → M/d/yy
+      '2026-06-02' → ISO
+      '45810'      → date serial (days since 1899-12-30)
+
+    Returns a datetime.date or None on failure.
+    """
+    s = str(date_str).strip()
+    if not s:
+        return None
+    for fmt in ('%d-%b-%y', '%m/%d/%Y', '%m/%d/%y', '%Y-%m-%d', '%d/%m/%Y'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    # Google Sheets numeric date serial (e.g. "45810" or "45810.0")
+    try:
+        serial = float(s)
+        if serial > 1:  # guard against accidentally parsing a small number
+            return (datetime(1899, 12, 30) + timedelta(days=int(serial))).date()
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def get_date_str(date):
     """
     Format a date object into the Acc_data sheet format, e.g. '1-Apr-26'.
@@ -259,8 +291,9 @@ def append_status_to_row(acc_data_ws, acc_data_rows, trading_date, account_id_st
     Called for end-run error cases where handle_end_run is never reached,
     so we still want to record that the end run failed for this account.
     """
+    target_date = parse_sheet_date(trading_date)
     for i, row in enumerate(acc_data_rows[1:], start=2):
-        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
+        if parse_sheet_date(row[0]) == target_date and str(row[1]).strip() == account_id_str:
             existing = row[6].strip() if len(row) > 6 else ''
             new_status = f"{existing} | {status_text}" if existing else status_text
             acc_data_ws.update_cell(i, 7, new_status)
@@ -296,7 +329,9 @@ def get_period_start_equity(acc_data_rows, account_id_str, today_date_obj, n_day
         if str(row[1]).strip() != account_id_str:
             continue
         try:
-            row_date = datetime.strptime(row[0].strip(), '%d-%b-%y').date()
+            row_date = parse_sheet_date(row[0])
+            if row_date is None:
+                continue
             equity   = parse_float(row[3])   # StartdayEquity is column index 3 (0-based)
             if equity is not None:
                 account_rows.append((row_date, equity))
@@ -609,8 +644,9 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, accou
     account_id_str = str(account_id)
 
     # Check if a row already exists for this trading date + account (duplicate start guard)
+    target_date = parse_sheet_date(trading_date)
     for i, row in enumerate(acc_data_rows[1:], start=2):
-        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
+        if parse_sheet_date(row[0]) == target_date and str(row[1]).strip() == account_id_str:
             log_warn(f"  [START] Row already exists for {account_id_str} on {trading_date}. "
                      f"Start run may have been triggered twice. Skipping.")
             # Append 'START: Duplicate' to the existing status so it's visible in the sheet
@@ -663,8 +699,9 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account
     start_balance = None
     start_equity  = None
 
+    target_date = parse_sheet_date(trading_date)
     for i, row in enumerate(acc_data_rows[1:], start=2):  # gspread rows are 1-indexed; skip header
-        if row[0] == trading_date and str(row[1]).strip() == account_id_str:
+        if parse_sheet_date(row[0]) == target_date and str(row[1]).strip() == account_id_str:
             row_index     = i
             start_balance = parse_float(row[2])
             start_equity  = parse_float(row[3])
