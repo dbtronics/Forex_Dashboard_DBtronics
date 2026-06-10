@@ -52,6 +52,8 @@ LOG_FILE          = os.path.join(SCRIPT_DIR, 'cron.log')
 SPREADSHEET_SOURCE = 'STS Database'            # source: MT5 account credentials
 SPREADSHEET_DEST   = 'STS Transaction History'  # destination: deal history output
 ACCOUNT_SHEET      = 'Account'
+EMP_ACC_SHEET      = 'Emp_Acc'
+EMPLOYEE_SHEET     = 'Employee'
 
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -107,7 +109,7 @@ def send_sms(body):
             log_warn(f"  Failed to send SMS to {number}: {e}")
 
 
-def build_transaction_sms(results):
+def build_transaction_sms(results, emp_map=None):
     """
     Build the transaction report SMS as a list of parts, each within
     Twilio's 1600 character limit. Caller sends each part separately.
@@ -123,6 +125,7 @@ def build_transaction_sms(results):
     Last part ends with a totals block across all accounts.
     """
     MAX_CHARS = 1580
+    emp_map   = emp_map or {}
 
     mst_now  = get_mst_time()
     run_date = mst_now.strftime('%#d-%b-%y')
@@ -137,13 +140,16 @@ def build_transaction_sms(results):
     # Build one segment (list of lines) per account
     segments = []
     for r in results:
+        trader  = emp_map.get(str(r['account_num']), 'UNKNOWN TRADER')
+        heading = f"-- {r['account_num']} | {trader} --"
+
         if r['status'] == 'skipped':
-            segments.append(["", f"-- {r['account_num']} --", f"  Skipped ({r['reason']})"])
+            segments.append(["", heading, f"  Skipped ({r['reason']})"])
             continue
 
         segments.append([
             "",
-            f"-- {r['account_num']} --",
+            heading,
             f"  Open Orders  : {r['open_orders']}",
             f"  Opened Today : {r['opened_today']}",
             f"  Closed Today : {r['closed_today']}",
@@ -195,6 +201,22 @@ def get_gsheet_client():
     """Authenticate with Google Sheets using the service account JSON key."""
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
     return gspread.authorize(creds)
+
+
+def get_emp_acc_map(client):
+    """Return {account_id_str: employee_name} from Emp_Acc + Employee sheets."""
+    db = client.open(SPREADSHEET_SOURCE)
+
+    emp_rows = db.worksheet(EMPLOYEE_SHEET).get_all_values()
+    emp_id_to_name = {r[0].strip(): r[1].strip() for r in emp_rows[1:] if len(r) >= 2 and r[0].strip()}
+
+    emp_acc_rows = db.worksheet(EMP_ACC_SHEET).get_all_values()
+    acc_to_emp = {}
+    for r in emp_acc_rows[1:]:
+        if len(r) >= 2 and r[0].strip() and r[1].strip():
+            acc_to_emp[r[1].strip()] = emp_id_to_name.get(r[0].strip(), 'UNKNOWN TRADER')
+
+    return acc_to_emp
 
 
 # ── Credential reader (same pattern as api_metatrader5_updated.py) ────────────
@@ -500,6 +522,7 @@ def run():
         log_warn("No active accounts to process. Exiting.")
         return
 
+    emp_map = get_emp_acc_map(client)
     dest_wb = client.open(SPREADSHEET_DEST)
     mt5.initialize()
 
@@ -511,7 +534,7 @@ def run():
 
     # Send transaction report SMS (may be split into multiple parts)
     log("-" * 40)
-    parts = build_transaction_sms(results)
+    parts = build_transaction_sms(results, emp_map)
     log(f"Sending transaction report SMS ({len(parts)} part(s))...")
     for i, part in enumerate(parts, 1):
         log(f"  Sending part {i}/{len(parts)}...")
