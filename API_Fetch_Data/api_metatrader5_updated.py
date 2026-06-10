@@ -55,6 +55,8 @@ CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, '..', 'n8n-automation-dbtronics-4981
 SPREADSHEET_NAME = 'STS Database'  # Google Sheets file name
 ACCOUNT_SHEET    = 'Account'        # Sheet containing MT5 login credentials
 ACC_DATA_SHEET   = 'Acc_data'       # Sheet where daily balance/equity data is written
+EMP_ACC_SHEET    = 'Emp_Acc'        # Sheet mapping employee IDs to account IDs
+EMPLOYEE_SHEET   = 'Employee'       # Sheet containing employee names
 
 # Scopes required: read + write access to Sheets and Drive
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets',
@@ -167,6 +169,28 @@ def get_credentials_from_sheet(client):
         })
 
     return credentials
+
+
+def get_emp_acc_map(client):
+    """
+    Return a dict mapping account_id_str -> employee_name by joining
+    the Employee and Emp_Acc sheets. Accounts with no employee entry
+    will not appear in the dict — callers should default to 'UNKNOWN TRADER'.
+    """
+    db = client.open(SPREADSHEET_NAME)
+
+    emp_rows = db.worksheet(EMPLOYEE_SHEET).get_all_values()
+    emp_id_to_name = {r[0].strip(): r[1].strip() for r in emp_rows[1:] if len(r) >= 2 and r[0].strip()}
+
+    emp_acc_rows = db.worksheet(EMP_ACC_SHEET).get_all_values()
+    acc_to_emp = {}
+    for r in emp_acc_rows[1:]:
+        if len(r) >= 2 and r[0].strip() and r[1].strip():
+            emp_id = r[0].strip()
+            acc_id = r[1].strip()
+            acc_to_emp[acc_id] = emp_id_to_name.get(emp_id, 'UNKNOWN TRADER')
+
+    return acc_to_emp
 
 
 def parse_percent(value):
@@ -355,7 +379,7 @@ def get_period_start_equity(acc_data_rows, account_id_str, today_date_obj, n_day
     return earliest_equity, actual_days
 
 
-def build_start_sms(run_date, results):
+def build_start_sms(run_date, results, emp_map=None):
     """
     Build the SMS message for a START run.
 
@@ -364,9 +388,10 @@ def build_start_sms(run_date, results):
       - Total / recorded / skipped counts
       - List of skipped accounts with reasons
     """
-    total     = len(results)
-    recorded  = [r for r in results if r['status'] == 'recorded']
-    skipped   = [r for r in results if r['status'] == 'skipped']
+    emp_map  = emp_map or {}
+    total    = len(results)
+    recorded = [r for r in results if r['status'] == 'recorded']
+    skipped  = [r for r in results if r['status'] == 'skipped']
 
     lines = [
         "[Forex Dashboard] START Run Complete",
@@ -382,12 +407,13 @@ def build_start_sms(run_date, results):
         lines.append("")
         lines.append("Skipped accounts:")
         for r in skipped:
-            lines.append(f"  - {r['id']} ({r['reason']})")
+            trader = emp_map.get(str(r['id']), 'UNKNOWN TRADER')
+            lines.append(f"  - {r['id']} | {trader} ({r['reason']})")
 
     return "\n".join(lines)
 
 
-def build_end_summary_sms(run_date, results):
+def build_end_summary_sms(run_date, results, emp_map=None):
     """
     Build SMS message 1 of 2 for an END run — the run summary.
 
@@ -396,6 +422,7 @@ def build_end_summary_sms(run_date, results):
       - Total / recorded / skipped counts
       - List of skipped accounts with reasons
     """
+    emp_map  = emp_map or {}
     total    = len(results)
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
     skipped  = [r for r in results if r['status'] == 'skipped']
@@ -414,7 +441,8 @@ def build_end_summary_sms(run_date, results):
         lines.append("")
         lines.append("Skipped accounts:")
         for r in skipped:
-            lines.append(f"  - {r['id']} ({r['reason']})")
+            trader = emp_map.get(str(r['id']), 'UNKNOWN TRADER')
+            lines.append(f"  - {r['id']} | {trader} ({r['reason']})")
 
     return "\n".join(lines)
 
@@ -432,34 +460,36 @@ def fmt_delta(value, is_cent=False):
     return f"{sign}${abs_val:,.2f}"
 
 
-def build_end_performance_sms(run_date, results):
+def build_end_performance_sms(run_date, results, emp_map=None):
     """
     Build SMS message 2 of 3 for an END run — per-account delta table only.
     Kept separate to stay within Twilio's 1600 character limit.
     """
+    emp_map  = emp_map or {}
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
 
     lines = [
         "[Forex Dashboard] Account Deltas",
         f"Date: {run_date}",
         "",
-        f"{'Account':<15} {'Type':<6} {'Cat':<10} {'Bal Delta':>11} {'Eq Delta':>11}",
-        f"{'-'*15} {'-'*6} {'-'*10} {'-'*11} {'-'*11}",
+        f"{'Account':<15} {'Trader':<20} {'Cat':<10} {'Bal Delta':>11} {'Eq Delta':>11}",
+        f"{'-'*15} {'-'*20} {'-'*10} {'-'*11} {'-'*11}",
     ]
 
     for r in recorded:
         is_cent   = r['type'] == 'Cent$'
         bal_delta = r['end_balance'] - r['start_balance']
         eq_delta  = r['end_equity']  - r['start_equity']
+        trader    = emp_map.get(str(r['id']), 'UNKNOWN TRADER')[:20]
         lines.append(
-            f"{r['id']:<15} {r['type']:<6} {r['category']:<10} "
+            f"{r['id']:<15} {trader:<20} {r['category']:<10} "
             f"{fmt_delta(bal_delta, is_cent):>11} {fmt_delta(eq_delta, is_cent):>11}"
         )
 
     return "\n".join(lines)
 
 
-def build_end_analysis_sms(run_date, results, acc_data_rows):
+def build_end_analysis_sms(run_date, results, acc_data_rows, emp_map=None):
     """
     Build SMS message(s) for an END run — multi-period analysis per account
     + real profit summary. Returns a LIST of strings so each part stays within
@@ -478,6 +508,7 @@ def build_end_analysis_sms(run_date, results, acc_data_rows):
     MAX_CHARS = 1580   # leave a little buffer for the (X/Y) part suffix
     PERIODS   = [(2, '2d'), (7, '7d'), (14, '14d'), (30, '30d')]
 
+    emp_map  = emp_map or {}
     recorded = [r for r in results if r['status'] in ('recorded', 'overwritten')]
 
     # Parse run_date string back to a date object for period arithmetic
@@ -494,13 +525,14 @@ def build_end_analysis_sms(run_date, results, acc_data_rows):
         """Build the line block for a single account."""
         size           = r['deposit_size']
         account_id_str = r['id']
+        trader         = emp_map.get(str(account_id_str), 'UNKNOWN TRADER')
         blk            = [""]   # blank separator before each account block
 
         if not size:
-            blk.append(f"  {account_id_str} - size not available")
+            blk.append(f"  {account_id_str} | {trader} - size not available")
             return blk
 
-        blk.append(f"  {account_id_str} (${size:,.0f})")
+        blk.append(f"  {account_id_str} | {trader} (${size:,.0f})")
 
         end_pct   = ((r['end_equity']   - size) / size) * 100
         start_pct = ((r['start_equity'] - size) / size) * 100
@@ -769,8 +801,9 @@ def fetch_account_info(run_type):
     """
     client = get_gsheet_client()
 
-    # Read credentials and Acc_data once per run to minimise API calls
+    # Read credentials, Acc_data, and employee-account mapping once per run
     credentials   = get_credentials_from_sheet(client)
+    emp_map       = get_emp_acc_map(client)
     db            = client.open(SPREADSHEET_NAME)
     acc_data_ws   = db.worksheet(ACC_DATA_SHEET)
     acc_data_rows = acc_data_ws.get_all_values()
@@ -851,22 +884,22 @@ def fetch_account_info(run_type):
     # ── Send SMS notifications ────────────────────────────────────────────────
     if run_type == 'start':
         # Single SMS: run summary only
-        sms = build_start_sms(run_date, results)
+        sms = build_start_sms(run_date, results, emp_map)
         log("Sending START summary SMS...")
         send_sms(sms)
 
     elif run_type == 'end':
         # SMS 1: run summary (total / recorded / skipped)
         log("Sending END summary SMS...")
-        send_sms(build_end_summary_sms(run_date, results))
+        send_sms(build_end_summary_sms(run_date, results, emp_map))
 
         # SMS 2: per-account delta table (commented out — covered by analysis SMS below)
         # log("Sending END account deltas SMS...")
-        # send_sms(build_end_performance_sms(run_date, results))
+        # send_sms(build_end_performance_sms(run_date, results, emp_map))
 
         # SMS 2: challenge/funded multi-period analysis + real profit summary
         # May be split into multiple parts if content exceeds 1600 chars
-        analysis_parts = build_end_analysis_sms(run_date, results, acc_data_rows)
+        analysis_parts = build_end_analysis_sms(run_date, results, acc_data_rows, emp_map)
         log(f"Sending END analysis SMS ({len(analysis_parts)} part(s))...")
         for i, part in enumerate(analysis_parts, 1):
             log(f"  Sending analysis part {i}/{len(analysis_parts)}...")
