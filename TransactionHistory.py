@@ -109,7 +109,8 @@ def send_sms(body):
 
 def build_transaction_sms(results):
     """
-    Build the transaction report SMS.
+    Build the transaction report SMS as a list of parts, each within
+    Twilio's 1600 character limit. Caller sends each part separately.
 
     Per account shows:
       Open Orders  — currently open positions (mt5.positions_get() at run time)
@@ -119,47 +120,74 @@ def build_transaction_sms(results):
     BALANCE and CREDIT deals are excluded from all counts as they are
     deposits/withdrawals, not actual trade orders.
 
-    Ends with a totals block across all accounts.
+    Last part ends with a totals block across all accounts.
     """
-    mst_now  = get_mst_time()
-    run_date = mst_now.strftime('%#d-%b-%y')   # e.g. 6-Apr-26 (Windows %#d)
-    run_time = mst_now.strftime('%I:%M %p')    # e.g. 03:15 PM
+    MAX_CHARS = 1580
 
-    lines = [
-        "[Forex Dashboard] Transaction Report",
-        f"Date: {run_date} | Time: {run_time} MST",
-    ]
+    mst_now  = get_mst_time()
+    run_date = mst_now.strftime('%#d-%b-%y')
+    run_time = mst_now.strftime('%I:%M %p')
+
+    base_header = f"[Forex Dashboard] Transaction Report\nDate: {run_date} | Time: {run_time} MST"
 
     total_open_orders  = 0
     total_opened_today = 0
     total_closed_today = 0
 
+    # Build one segment (list of lines) per account
+    segments = []
     for r in results:
         if r['status'] == 'skipped':
-            lines.append("")
-            lines.append(f"-- {r['account_num']} --")
-            lines.append(f"  Skipped ({r['reason']})")
+            segments.append(["", f"-- {r['account_num']} --", f"  Skipped ({r['reason']})"])
             continue
 
-        lines.append("")
-        lines.append(f"-- {r['account_num']} --")
-        lines.append(f"  Open Orders  : {r['open_orders']}")
-        lines.append(f"  Opened Today : {r['opened_today']}")
-        lines.append(f"  Closed Today : {r['closed_today']}")
-
+        segments.append([
+            "",
+            f"-- {r['account_num']} --",
+            f"  Open Orders  : {r['open_orders']}",
+            f"  Opened Today : {r['opened_today']}",
+            f"  Closed Today : {r['closed_today']}",
+        ])
         total_open_orders  += r['open_orders']
         total_opened_today += r['opened_today']
         total_closed_today += r['closed_today']
 
-    # Totals block (only meaningful if more than one account)
+    # Append totals as the final segment
     if len([r for r in results if r['status'] != 'skipped']) > 1:
-        lines.append("")
-        lines.append("-- Total --")
-        lines.append(f"  Open Orders  : {total_open_orders}")
-        lines.append(f"  Opened Today : {total_opened_today}")
-        lines.append(f"  Closed Today : {total_closed_today}")
+        segments.append([
+            "",
+            "-- Total --",
+            f"  Open Orders  : {total_open_orders}",
+            f"  Opened Today : {total_opened_today}",
+            f"  Closed Today : {total_closed_today}",
+        ])
 
-    return "\n".join(lines)
+    # Try to fit everything into one SMS first
+    all_lines = [base_header] + [line for seg in segments for line in seg]
+    if len("\n".join(all_lines)) <= MAX_CHARS:
+        return ["\n".join(all_lines)]
+
+    # Greedy pack: flush current part when next segment won't fit
+    parts         = []
+    current_lines = [base_header]
+
+    for seg in segments:
+        candidate = current_lines + seg
+        if len("\n".join(candidate)) > MAX_CHARS and len(current_lines) > 1:
+            parts.append("\n".join(current_lines))
+            current_lines = [base_header] + seg
+        else:
+            current_lines = candidate
+
+    if len(current_lines) > 1:
+        parts.append("\n".join(current_lines))
+
+    # Tag each part with (X/Y) so recipient knows there are multiple
+    if len(parts) > 1:
+        total = len(parts)
+        parts = [f"{p} ({i}/{total})" for i, p in enumerate(parts, 1)]
+
+    return parts
 
 
 # ── Google Sheets auth ────────────────────────────────────────────────────────
@@ -481,10 +509,13 @@ def run():
         result = export_account(dest_wb, cred)
         results.append(result)
 
-    # Send transaction report SMS
+    # Send transaction report SMS (may be split into multiple parts)
     log("-" * 40)
-    log("Sending transaction report SMS...")
-    send_sms(build_transaction_sms(results))
+    parts = build_transaction_sms(results)
+    log(f"Sending transaction report SMS ({len(parts)} part(s))...")
+    for i, part in enumerate(parts, 1):
+        log(f"  Sending part {i}/{len(parts)}...")
+        send_sms(part)
 
     log("=" * 60)
     log("TransactionHistory — DONE")
