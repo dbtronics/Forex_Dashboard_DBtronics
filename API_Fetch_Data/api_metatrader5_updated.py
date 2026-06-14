@@ -585,17 +585,33 @@ def build_end_analysis_sms(run_date, results, acc_data_rows, emp_map=None):
     # ── Real Profit Summary ───────────────────────────────────────────────────
     # Only Funded, LIVE $, and LIVE Cent$ count toward real profit.
     # Equity is used (not balance) to capture unrealised P&L.
-    # Cent$ equity deltas are divided by 100 to convert to USD.
-    funded_profit = sum(r['end_equity'] - r['start_equity']
-                        for r in recorded if r['category'] == 'Funded')
-    live_dollar   = sum(r['end_equity'] - r['start_equity']
-                        for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
-    live_cent_raw = sum(r['end_equity'] - r['start_equity']
-                        for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
-    live_cent_usd = live_cent_raw / 100
-    total_real    = funded_profit + live_dollar + live_cent_usd
+    # Deposits and withdrawals (DEAL_TYPE_BALANCE) are stripped from the equity
+    # delta before summing so they don't distort the trading P&L figure.
+    # Cent$ values are divided by 100 to convert to USD.
+    def trading_pnl(r):
+        raw    = r['end_equity'] - r['start_equity']
+        net_dw = r.get('today_deposits', 0) + r.get('today_withdrawals', 0)
+        return raw - net_dw
 
-    segments.append([
+    funded_profit   = sum(trading_pnl(r) for r in recorded if r['category'] == 'Funded')
+    live_dollar     = sum(trading_pnl(r) for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
+    live_cent_raw   = sum(trading_pnl(r) for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
+    live_cent_usd   = live_cent_raw / 100
+    total_real      = funded_profit + live_dollar + live_cent_usd
+
+    # Collect deposits/withdrawals per category for the informational section
+    funded_dep      = sum(r.get('today_deposits', 0)    for r in recorded if r['category'] == 'Funded')
+    funded_wd       = sum(r.get('today_withdrawals', 0) for r in recorded if r['category'] == 'Funded')
+    live_dep        = sum(r.get('today_deposits', 0)    for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
+    live_wd         = sum(r.get('today_withdrawals', 0) for r in recorded if r['category'] == 'LIVE' and r['type'] == '$')
+    cent_dep_raw    = sum(r.get('today_deposits', 0)    for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
+    cent_wd_raw     = sum(r.get('today_withdrawals', 0) for r in recorded if r['category'] == 'LIVE' and r['type'] == 'Cent$')
+    cent_dep_usd    = cent_dep_raw / 100
+    cent_wd_usd     = cent_wd_raw  / 100
+    total_dep       = funded_dep + live_dep + cent_dep_usd
+    total_wd        = funded_wd  + live_wd  + cent_wd_usd
+
+    summary_seg = [
         "",
         "-- Real Profit Summary --",
         f"  Funded     : {fmt_delta(funded_profit)}",
@@ -603,7 +619,22 @@ def build_end_analysis_sms(run_date, results, acc_data_rows, emp_map=None):
         f"  Live c(÷100): {fmt_delta(live_cent_usd)}",
         f"  ---",
         f"  Total: {fmt_delta(total_real)}",
-    ])
+    ]
+
+    # Only append the Dep/Wd section when something actually moved
+    if any([funded_dep, funded_wd, live_dep, live_wd, cent_dep_raw, cent_wd_raw]):
+        def fmt_dw(dep, wd):
+            return f"Dep ${abs(dep):,.0f} | Wd ${abs(wd):,.0f}"
+        summary_seg += [
+            "",
+            "  Dep / Wd (session):",
+            f"  Funded : {fmt_dw(funded_dep, funded_wd)}",
+            f"  Live $ : {fmt_dw(live_dep, live_wd)}",
+            f"  Live c : {fmt_dw(cent_dep_usd, cent_wd_usd)}",
+            f"  Net D/W: {fmt_delta(total_dep + total_wd)}",
+        ]
+
+    segments.append(summary_seg)
 
     # ── Pack segments into SMS parts (greedy, max MAX_CHARS each) ────────────
     base_header = f"[Forex Dashboard] Daily Analysis\nDate: {run_date}"
@@ -706,7 +737,8 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, accou
 
 
 def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account_category,
-                   deposit_size, daily_drawdown, profit_target, balance, equity):
+                   deposit_size, daily_drawdown, profit_target, balance, equity,
+                   today_deposits=0.0, today_withdrawals=0.0):
     """
     END run logic — called when script is invoked with 'end' argument.
 
@@ -789,6 +821,8 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account
         'start_equity':  start_equity  if start_equity  is not None else equity,
         'end_balance':   balance,
         'end_equity':    equity,
+        'today_deposits':    today_deposits,
+        'today_withdrawals': today_withdrawals,
     }
 
 
@@ -872,10 +906,22 @@ def fetch_account_info(run_type):
                 accountInfo.balance, accountInfo.equity
             )
         elif run_type == 'end':
+            # Fetch BALANCE deals (type 2 = deposit/withdrawal) for the trading session window:
+            # from 4 PM yesterday (start run time) to now (end run time).
+            _now           = datetime.now()
+            _session_start = (_now - timedelta(days=1)).replace(
+                hour=16, minute=0, second=0, microsecond=0
+            )
+            _bal_deals   = mt5.history_deals_get(_session_start, _now) or []
+            _deposits    = sum(d.profit for d in _bal_deals if d.type == 2 and d.profit > 0)
+            _withdrawals = sum(d.profit for d in _bal_deals if d.type == 2 and d.profit < 0)
+            if _deposits or _withdrawals:
+                log(f"  Session balance ops — deposits: {_deposits:.2f} | withdrawals: {_withdrawals:.2f}")
             result = handle_end_run(
                 acc_data_ws, acc_data_rows, cred['ID'], cred['Type'], cred['Category'],
                 cred['DepositSize'], cred['DailyDrawdown'], cred['ProfitTarget'],
-                accountInfo.balance, accountInfo.equity
+                accountInfo.balance, accountInfo.equity,
+                _deposits, _withdrawals
             )
 
         time.sleep(5)

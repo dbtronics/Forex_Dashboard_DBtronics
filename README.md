@@ -115,6 +115,8 @@ python API_Fetch_Data/api_metatrader5_updated.py end
 **Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`, `Status`)
 
 > **Analysis calculations use equity, not balance.** All period performance figures (1d/2d/7d/14d/30d), challenge target progress, funded status moves, and the real profit summary are derived from equity values to include unrealised P&L.
+>
+> **Deposits and withdrawals are excluded from the Real Profit Summary.** During the END run, the script fetches `DEAL_TYPE_BALANCE` deals (MT5 type 2) for the trading session window (4 PM yesterday → 3 PM today). These are subtracted from the equity delta before reporting so a large deposit does not inflate the profit figure and a withdrawal does not show as a loss. When any deposit or withdrawal occurred, a separate `Dep / Wd (session)` breakdown is appended at the bottom of the Real Profit Summary.
 
 **Logging:** Every run appends to `cron.log` in the project root with timestamps, account-level results, and any warnings.
 
@@ -210,7 +212,15 @@ Date: 1-Apr-26
   Live c(÷100): -$15.30
   ---
   Total: +$545.20
+
+  Dep / Wd (session):
+  Funded : Dep $10,000 | Wd $0
+  Live $ : Dep $0 | Wd $500
+  Live c : Dep $0 | Wd $0
+  Net D/W: +$9,500
 ```
+
+> The `Dep / Wd` section only appears when at least one deposit or withdrawal occurred during the session. On days with no balance operations it is omitted entirely to keep the SMS concise.
 
 If the analysis exceeds Twilio's 1600 character limit, it is automatically split into numbered parts sent as separate SMS messages:
 
@@ -389,7 +399,6 @@ Each run of `api_metatrader5_updated.py` appends to `cron.log` in the project ro
 ## Future Work
 - Integrate Flask dashboard with Google Sheets data (replacing `api_web.csv` dependency)
 - Add MT4 support via REST API
-- Add deposit and withdrawal history tracking via `mt5.history_deals_get()`
 
 ---
 
