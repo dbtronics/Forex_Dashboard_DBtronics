@@ -420,12 +420,22 @@ def export_account(dest_wb, cred):
     Tab not found → create tab, write header, backfill last HISTORY_DAYS days
     Tab found     → fetch last INCREMENTAL_DAYS, deduplicate by ticket, append new
     """
-    account_id = cred['ID']
+    account_id        = cred['ID']
+    MAX_LOGIN_RETRIES = 3
+    RETRY_DELAY_SEC   = 5
     log(f"  Logging into MT5 account {account_id}...")
 
-    success = mt5.login(int(account_id), cred['Password'], cred['Server'])
+    success = False
+    for attempt in range(1, MAX_LOGIN_RETRIES + 1):
+        success = mt5.login(int(account_id), cred['Password'], cred['Server'])
+        if success:
+            break
+        log_warn(f"  MT5 login attempt {attempt}/{MAX_LOGIN_RETRIES} failed for {account_id}: {mt5.last_error()}")
+        if attempt < MAX_LOGIN_RETRIES:
+            time.sleep(RETRY_DELAY_SEC)
+
     if not success:
-        log_warn(f"  MT5 login failed for {account_id}: {mt5.last_error()}")
+        log_warn(f"  MT5 login failed for {account_id} after {MAX_LOGIN_RETRIES} attempts.")
         return {'account_num': account_id, 'status': 'skipped', 'reason': 'MT5 login failed'}
 
     account_info = mt5.account_info()

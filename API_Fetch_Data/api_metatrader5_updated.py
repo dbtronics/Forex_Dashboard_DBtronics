@@ -856,11 +856,23 @@ def fetch_account_info(run_type):
 
     results = []  # collects outcome for each account, used for SMS reporting
 
+    MAX_LOGIN_RETRIES = 3
+    RETRY_DELAY_SEC   = 5
+
     for cred in credentials:
-        # Login to MT5 account — login ID must be an integer
-        success = mt5.login(int(cred['ID']), cred['Password'], cred['Server'])
+        # Login to MT5 — retry up to MAX_LOGIN_RETRIES times with a short delay.
+        # mt5.login() is flaky under broker load / rapid account switching.
+        success = False
+        for attempt in range(1, MAX_LOGIN_RETRIES + 1):
+            success = mt5.login(int(cred['ID']), cred['Password'], cred['Server'])
+            if success:
+                break
+            log_warn(f"  MT5 login attempt {attempt}/{MAX_LOGIN_RETRIES} failed for {cred['ID']}: {mt5.last_error()}")
+            if attempt < MAX_LOGIN_RETRIES:
+                time.sleep(RETRY_DELAY_SEC)
+
         if not success:
-            log_warn(f"  MT5 login failed for {cred['ID']} — skipping")
+            log_warn(f"  MT5 login failed for {cred['ID']} after {MAX_LOGIN_RETRIES} attempts — skipping")
             results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
                             'status': 'skipped', 'reason': 'MT5 login failed'})
             # Record the error in Acc_data so it's visible in the sheet:
