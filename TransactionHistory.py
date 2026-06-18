@@ -436,6 +436,11 @@ def export_account(dest_wb, cred):
 
     if not success:
         log_warn(f"  MT5 login failed for {account_id} after {MAX_LOGIN_RETRIES} attempts.")
+        # Reset the MT5 terminal connection so the stuck state from this failed
+        # login does not cascade and cause all subsequent accounts to fail too.
+        mt5.shutdown()
+        time.sleep(2)
+        mt5.initialize()
         return {'account_num': account_id, 'status': 'skipped', 'reason': 'MT5 login failed'}
 
     account_info = mt5.account_info()
