@@ -51,8 +51,9 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive',
 ]
 
-TARGET_PCT       = 10.0   # profit target (%) used for projection and probability
-DEFAULT_RUIN_PCT = 5.0    # fallback ruin threshold when account drawdown not available
+TARGET_PCT_5     = 5.0    # first profit target (%)
+TARGET_PCT_10    = 10.0   # second profit target (%)
+DEFAULT_RUIN_PCT = 4.0    # fallback ruin threshold when account drawdown not available
 MIN_SAMPLE       = 100    # trades required for 'Sufficient' sample quality label
 MONTE_CARLO_RUNS = 3000   # simulations for P(reach target before ruin)
 
@@ -83,7 +84,8 @@ DATA_HEADERS = [
     'EV/Trade ($)', 'Avg Trades/Day', 'Daily EV ($)',
     'Max Loss Streak', 'Largest Win ($)', 'Largest Loss ($)',
     'Avg Duration (hrs)', 'Manual %', 'Top Symbol',
-    'Proj. Days to 10%', 'P(10% before ruin) %',
+    'Proj. Days to 5%', 'P(5% before 4% ruin) %',
+    'Proj. Days to 10%', 'P(10% before 4% ruin) %',
     'Notes',
 ]
 
@@ -212,17 +214,31 @@ GLOSSARY = [
         'No numeric range — verify instrument is allowed under account rules.',
     ],
     [
+        'Proj. Days to 5%',
+        '(Account Size × 5%) ÷ Daily EV',
+        'Linear estimate of calendar days to reach the 5% profit target at historical pace. Optimistic — ignores variance and bad streaks.',
+        'Always read alongside P(5% before 4% ruin). Fast projection with low probability = dangerous.',
+        'Fast <15d | Good 15–30d | Average 30–60d | Slow >60d',
+    ],
+    [
+        'P(5% before 4% ruin) %',
+        'Monte Carlo simulation (3,000 random paths) — each trade wins avg_win_pct or loses avg_loss_pct at historical win rate. Count paths that reach +5% before −4%.',
+        'Probability of reaching +5% profit before the account drops 4% from starting equity. NOT combinatorics — random sampling of 3,000 paths from a space of 2^n possibilities.',
+        'Most honest near-term metric. A trader who passes challenges but scores <40% here got lucky.',
+        'Poor <40% | Uncertain 40–60% | Good 60–75% | Strong >75%',
+    ],
+    [
         'Proj. Days to 10%',
         '(Account Size × 10%) ÷ Daily EV',
-        'Linear estimate of calendar days to reach the 10% profit target at historical pace. Optimistic — ignores bad streaks.',
-        'Always read alongside P(10% before ruin). A fast projection with low P(target) is misleading.',
+        'Linear estimate of calendar days to reach the 10% profit target at historical pace. Optimistic — ignores variance and bad streaks.',
+        'Always read alongside P(10% before 4% ruin). A fast projection with low probability is misleading.',
         'Fast <30d | Good 30–60d | Average 60–120d | Slow >120d',
     ],
     [
-        'P(10% before ruin) %',
-        'Monte Carlo simulation (3,000 runs) using Win Rate and Avg Win/Loss as % of account size',
-        'Probability of reaching +10% profit before hitting the ruin threshold (account daily drawdown limit, default −5%). Most honest forward-looking metric.',
-        'This is the single most important number for vetting a trader on a funded account.',
+        'P(10% before 4% ruin) %',
+        'Monte Carlo simulation (3,000 random paths) — each trade wins avg_win_pct or loses avg_loss_pct at historical win rate. Count paths that reach +10% before −4%.',
+        'Probability of reaching +10% profit before the account drops 4% from starting equity. Harder than the 5% version — fewer paths survive long enough to double the target.',
+        'Single most important number for vetting a trader on a funded challenge account.',
         'Poor <40% | Uncertain 40–60% | Good 60–75% | Strong >75%',
     ],
     [
@@ -312,14 +328,24 @@ COLUMN_CF_RULES = [
     (21, [('NUMBER_LESS',             ['50'],        CF_RED),
           ('NUMBER_BETWEEN',          ['50', '89.9'],CF_YELLOW),
           ('NUMBER_GREATER_THAN_EQ',  ['90'],        CF_GREEN)]),
-    # Proj. Days to 10% — LOWER is better (inverted)
-    # Green <30 | Yellow 30–120 | Red >120
-    (23, [('NUMBER_GREATER',          ['120'],       CF_RED),
-          ('NUMBER_BETWEEN',          ['30', '120'], CF_YELLOW),
-          ('NUMBER_LESS',             ['30'],        CF_GREEN)]),
-    # P(10% before ruin) % — higher is better
+    # Proj. Days to 5% — LOWER is better (inverted)
+    # Green <15 | Yellow 15–60 | Red >60
+    (23, [('NUMBER_GREATER',          ['60'],        CF_RED),
+          ('NUMBER_BETWEEN',          ['15', '60'],  CF_YELLOW),
+          ('NUMBER_LESS',             ['15'],        CF_GREEN)]),
+    # P(5% before 4% ruin) % — higher is better
     # Red <40 | Yellow 40–59.9 | Green >=60
     (24, [('NUMBER_LESS',             ['40'],        CF_RED),
+          ('NUMBER_BETWEEN',          ['40', '59.9'],CF_YELLOW),
+          ('NUMBER_GREATER_THAN_EQ',  ['60'],        CF_GREEN)]),
+    # Proj. Days to 10% — LOWER is better (inverted)
+    # Green <30 | Yellow 30–120 | Red >120
+    (25, [('NUMBER_GREATER',          ['120'],       CF_RED),
+          ('NUMBER_BETWEEN',          ['30', '120'], CF_YELLOW),
+          ('NUMBER_LESS',             ['30'],        CF_GREEN)]),
+    # P(10% before 4% ruin) % — higher is better
+    # Red <40 | Yellow 40–59.9 | Green >=60
+    (26, [('NUMBER_LESS',             ['40'],        CF_RED),
           ('NUMBER_BETWEEN',          ['40', '59.9'],CF_YELLOW),
           ('NUMBER_GREATER_THAN_EQ',  ['60'],        CF_GREEN)]),
 ]
@@ -392,7 +418,7 @@ def get_account_info(db):
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 def monte_carlo_probability(win_rate_pct, avg_win_pct, avg_loss_pct,
-                            target_pct=TARGET_PCT, ruin_pct=DEFAULT_RUIN_PCT,
+                            target_pct=TARGET_PCT_10, ruin_pct=DEFAULT_RUIN_PCT,
                             n=MONTE_CARLO_RUNS):
     """
     Estimate P(account equity reaches +target_pct before -ruin_pct)
@@ -490,17 +516,26 @@ def calculate_metrics(trades, total_deposit, ruin_pct):
     avg_trades_per_day = round(total / days_of_data, 1)
     daily_ev           = round(ev * avg_trades_per_day, 2)
 
-    # Time-based projections (require account size)
-    proj_days = None
-    p_target  = None
+    # Time-based projections and Monte Carlo probabilities (require account size)
+    proj_days_5  = None
+    proj_days_10 = None
+    p_target_5   = None
+    p_target_10  = None
+
     if total_deposit and total_deposit > 0:
-        if daily_ev > 0:
-            proj_days = round((total_deposit * TARGET_PCT / 100) / daily_ev, 1)
         avg_win_pct  = avg_win  / total_deposit * 100
         avg_loss_pct = avg_loss / total_deposit * 100
+
+        if daily_ev > 0:
+            proj_days_5  = round((total_deposit * TARGET_PCT_5  / 100) / daily_ev, 1)
+            proj_days_10 = round((total_deposit * TARGET_PCT_10 / 100) / daily_ev, 1)
+
         if avg_loss_pct > 0:
-            p_target = monte_carlo_probability(
-                win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT, ruin_pct
+            p_target_5  = monte_carlo_probability(
+                win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_5,  ruin_pct
+            )
+            p_target_10 = monte_carlo_probability(
+                win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_10, ruin_pct
             )
 
     return {
@@ -513,7 +548,7 @@ def calculate_metrics(trades, total_deposit, ruin_pct):
         'profit_factor':   profit_factor,
         'net_pnl':         round(net_pnl, 2),
         'avg_win':         round(avg_win, 2),
-        'avg_loss':        round(-avg_loss, 2),   # shown negative
+        'avg_loss':        round(-avg_loss, 2),
         'rr':              rr,
         'ev_per_trade':    round(ev, 2),
         'avg_trades_day':  avg_trades_per_day,
@@ -524,8 +559,10 @@ def calculate_metrics(trades, total_deposit, ruin_pct):
         'avg_dur_hrs':     avg_dur_hrs,
         'manual_pct':      manual_pct,
         'top_symbol':      top_symbol,
-        'proj_days':       proj_days,
-        'p_target':        p_target,
+        'proj_days_5':     proj_days_5,
+        'p_target_5':      p_target_5,
+        'proj_days_10':    proj_days_10,
+        'p_target_10':     p_target_10,
     }
 
 
@@ -730,7 +767,7 @@ def run():
                 last_updated, trader, ', '.join(accs),
                 na, na, na, na, na, na, na, na, na, na,
                 na, na, na, na, na, na, na, na, na, na,
-                na, na, notes,
+                na, na, na, na, notes,
             ])
             log(f"  UNKNOWN TRADER: {len(trades)} trades across {len(accs)} unlinked accounts — metrics suppressed")
             continue
@@ -763,8 +800,10 @@ def run():
             m['avg_dur_hrs'],
             m['manual_pct'],
             m['top_symbol'],
-            m['proj_days'] if m['proj_days'] is not None else 'N/A',
-            m['p_target']  if m['p_target']  is not None else 'N/A',
+            m['proj_days_5']  if m['proj_days_5']  is not None else 'N/A',
+            m['p_target_5']   if m['p_target_5']   is not None else 'N/A',
+            m['proj_days_10'] if m['proj_days_10'] is not None else 'N/A',
+            m['p_target_10']  if m['p_target_10']  is not None else 'N/A',
             notes,
         ])
 
@@ -772,7 +811,7 @@ def run():
             f"  {trader}: {m['total_trades']} trades | "
             f"WR {m['win_rate']}% (BEP {m['breakeven_wr']}%, margin {m['wr_margin']:+.1f}%) | "
             f"PF {m['profit_factor']} | EV/trade ${m['ev_per_trade']} | "
-            f"P(target) {m['p_target']}%"
+            f"P(5%) {m['p_target_5']}% | P(10%) {m['p_target_10']}%"
         )
 
     # ── Write to sheet and apply formatting ───────────────────────
