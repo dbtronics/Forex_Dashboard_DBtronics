@@ -249,6 +249,69 @@ GLOSSARY = [
 ]
 
 
+# ── Conditional formatting colours (RGB 0-1 scale) ───────────────────────────
+CF_RED    = {'red': 0.918, 'green': 0.600, 'blue': 0.600}   # #EA9999
+CF_YELLOW = {'red': 1.0,   'green': 0.898, 'blue': 0.600}   # #FFE599
+CF_GREEN  = {'red': 0.718, 'green': 0.882, 'blue': 0.804}   # #B7E1CD
+
+# Rules per column (0-based column index → list of (condition_type, values, colour)).
+# Rules are listed in PRIORITY ORDER — first match wins for each cell.
+# "Higher is better" columns: red < yellow threshold < green threshold.
+# "Lower is better" (inverted) columns: red > yellow threshold > green threshold.
+COLUMN_CF_RULES = [
+    # Days of Data — higher is better
+    (3,  [('NUMBER_LESS',       ['30'],  CF_RED),
+          ('NUMBER_LESS',       ['90'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['90'],  CF_GREEN)]),
+    # Total Trades — higher is better
+    (4,  [('NUMBER_LESS',       ['50'],  CF_RED),
+          ('NUMBER_LESS',       ['200'], CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['200'], CF_GREEN)]),
+    # Win Rate % — higher is better
+    (6,  [('NUMBER_LESS',       ['35'],  CF_RED),
+          ('NUMBER_LESS',       ['50'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['50'],  CF_GREEN)]),
+    # WR Margin % — higher is better; negative = losing system
+    (8,  [('NUMBER_LESS',       ['0'],   CF_RED),
+          ('NUMBER_LESS',       ['5'],   CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['5'],   CF_GREEN)]),
+    # Profit Factor — higher is better
+    (9,  [('NUMBER_LESS',       ['1.0'], CF_RED),
+          ('NUMBER_LESS',       ['1.5'], CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['1.5'], CF_GREEN)]),
+    # Net P&L — positive = green, negative = red (no yellow; sign is the signal)
+    (10, [('NUMBER_LESS',       ['0'],   CF_RED),
+          ('NUMBER_GREATER_EQ', ['0'],   CF_GREEN)]),
+    # R:R — higher is better
+    (13, [('NUMBER_LESS',       ['0.8'], CF_RED),
+          ('NUMBER_LESS',       ['1.2'], CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['1.2'], CF_GREEN)]),
+    # EV/Trade — higher is better; negative = losing system
+    (14, [('NUMBER_LESS',       ['0'],   CF_RED),
+          ('NUMBER_LESS',       ['10'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['10'],  CF_GREEN)]),
+    # Daily EV — higher is better
+    (16, [('NUMBER_LESS',       ['0'],   CF_RED),
+          ('NUMBER_LESS',       ['50'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['50'],  CF_GREEN)]),
+    # Max Loss Streak — LOWER is better (inverted)
+    (17, [('NUMBER_GREATER',    ['12'],  CF_RED),
+          ('NUMBER_GREATER_EQ', ['5'],   CF_YELLOW),
+          ('NUMBER_LESS',       ['5'],   CF_GREEN)]),
+    # Manual % — higher is better (100% = fully manual)
+    (21, [('NUMBER_LESS',       ['50'],  CF_RED),
+          ('NUMBER_LESS',       ['90'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['90'],  CF_GREEN)]),
+    # Proj. Days to 10% — LOWER is better (inverted)
+    (23, [('NUMBER_GREATER',    ['120'], CF_RED),
+          ('NUMBER_GREATER_EQ', ['30'],  CF_YELLOW),
+          ('NUMBER_LESS',       ['30'],  CF_GREEN)]),
+    # P(10% before ruin) % — higher is better
+    (24, [('NUMBER_LESS',       ['40'],  CF_RED),
+          ('NUMBER_LESS',       ['60'],  CF_YELLOW),
+          ('NUMBER_GREATER_EQ', ['60'],  CF_GREEN)]),
+]
+
 # ── Google Sheets auth ────────────────────────────────────────────────────────
 def get_gsheet_client():
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
@@ -486,6 +549,74 @@ def write_metrics_sheet(ws, trader_rows):
         f"to '{METRICS_SHEET}'.")
 
 
+# ── Conditional formatting ────────────────────────────────────────────────────
+def apply_conditional_formatting(spreadsheet, ws):
+    """
+    Apply Red / Yellow / Green background colours to metric columns.
+
+    Called after every write so formatting always matches the current data.
+    Existing rules are cleared first to prevent stacking on repeated runs.
+    Data rows start at row index 1 (row 0 is the header).
+    """
+    sheet_id  = ws._properties['sheetId']
+    START_ROW = 1      # first data row (0-based, skips header)
+    END_ROW   = 200    # covers up to 199 trader rows
+
+    # ── Delete all existing CF rules on this sheet ────────────────
+    try:
+        meta       = spreadsheet.fetch_sheet_metadata()
+        num_rules  = 0
+        for sheet_info in meta.get('sheets', []):
+            if sheet_info['properties']['sheetId'] == sheet_id:
+                num_rules = len(sheet_info.get('conditionalFormats', []))
+                break
+    except Exception:
+        num_rules = 0
+
+    requests = []
+    for _ in range(num_rules):
+        # Each delete shifts the remaining rules down so always delete index 0
+        requests.append({
+            'deleteConditionalFormatRule': {
+                'sheetId': sheet_id,
+                'index':   0,
+            }
+        })
+
+    # ── Build new CF rules ────────────────────────────────────────
+    # Rules are added in priority order: first rule added gets lowest index
+    # (= highest priority). Within each column: red first, yellow second,
+    # green third — so red always beats yellow which beats green.
+    for col_idx, rules in COLUMN_CF_RULES:
+        for condition_type, values, colour in rules:
+            requests.append({
+                'addConditionalFormatRule': {
+                    'rule': {
+                        'ranges': [{
+                            'sheetId':          sheet_id,
+                            'startRowIndex':    START_ROW,
+                            'endRowIndex':      END_ROW,
+                            'startColumnIndex': col_idx,
+                            'endColumnIndex':   col_idx + 1,
+                        }],
+                        'booleanRule': {
+                            'condition': {
+                                'type':   condition_type,
+                                'values': [{'userEnteredValue': v} for v in values],
+                            },
+                            'format': {'backgroundColor': colour},
+                        },
+                    },
+                    'index': 0,   # always insert at top; prior rules shift down
+                }
+            })
+
+    if requests:
+        spreadsheet.batch_update({'requests': requests})
+        num_cf = sum(1 for r in requests if 'addConditionalFormatRule' in r)
+        log(f"  Applied {num_cf} conditional format rules to '{ws.title}'.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def run():
     log('=' * 60)
@@ -632,10 +763,13 @@ def run():
             f"P(target) {m['p_target']}%"
         )
 
-    # ── Write to sheet ─────────────────────────────────────────────
+    # ── Write to sheet and apply formatting ───────────────────────
     log(f"Writing to '{METRICS_SHEET}' in {SPREADSHEET_SOURCE}...")
     metrics_ws = ensure_metrics_sheet(db)
     write_metrics_sheet(metrics_ws, output_rows)
+
+    log('Applying conditional formatting (Red / Yellow / Green)...')
+    apply_conditional_formatting(db, metrics_ws)
 
     log('=' * 60)
     log('TraderMetrics — DONE')
