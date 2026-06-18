@@ -78,11 +78,13 @@ The script is invoked with a `start` or `end` argument that determines what gets
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Start runs twice on the same day | Skips second run; appends `START: Duplicate` to the existing row's Status |
+| Start runs twice on the same day | Detects existing row with real balance data → skips, appends `START: Duplicate` to Status |
+| Start re-run after a failed login | Detects existing row with **blank** balance → fills in real values, sets `START: OK (retry)` |
 | End runs and today's row is missing | Logs a warning and skips (start was likely missed) |
 | End runs twice on the same day | Overwrites EnddayBalance/Equity with latest values; Status shows `END: Overwritten` |
-| MT5 login fails (start run) | Writes a partial row (balance/equity blank) with `START: MT5 login failed` |
-| MT5 login fails (end run) | Finds the existing start row and appends `END: MT5 login failed` to Status |
+| MT5 login fails (start run) | Retries up to 3× with 5s gap; if still failing, writes a partial row (balance blank) with `START: MT5 login failed` and resets MT5 connection |
+| MT5 login fails (end run) | Retries up to 3×; if still failing, appends `END: MT5 login failed` to existing row's Status and resets MT5 connection |
+| MT5 login fails for one account cascading to others | After exhausting retries, `mt5.shutdown()` + `mt5.initialize()` clears any stuck terminal state before the next account |
 | `account_info()` returns None (start run) | Writes a partial row with `START: Account info error` |
 | `account_info()` returns None (end run) | Appends `END: Account info error` to existing row's Status |
 
@@ -93,12 +95,13 @@ The `Status` column (column G) in `Acc_data` records what happened during each r
 | Value | Run | Meaning |
 |-------|-----|---------|
 | `START: OK` | start | Balance & equity recorded successfully |
-| `START: MT5 login failed` | start | Could not authenticate with MT5 |
+| `START: OK (retry)` | start | Partial row from a previous failed run was filled in on re-run |
+| `START: MT5 login failed` | start | Could not authenticate with MT5 after 3 attempts |
 | `START: Account info error` | start | Logged in but `account_info()` returned None |
-| `START: Duplicate` | start | Row already existed; second start run skipped |
+| `START: Duplicate` | start | Row with real balance already existed; second start run skipped |
 | `END: OK` | end | End-of-day values recorded successfully |
 | `END: Overwritten` | end | End values already existed; overwritten with latest |
-| `END: MT5 login failed` | end | Could not authenticate with MT5 |
+| `END: MT5 login failed` | end | Could not authenticate with MT5 after 3 attempts |
 | `END: Account info error` | end | Logged in but `account_info()` returned None |
 | `END: No start row` | end | No matching start row found; start run likely missed |
 
@@ -108,9 +111,18 @@ Example cell after a clean day: `START: OK | END: OK`
 
 **Usage:**
 ```bash
+# Normal scheduled runs
 python API_Fetch_Data/api_metatrader5_updated.py start
 python API_Fetch_Data/api_metatrader5_updated.py end
+
+# Targeted re-run for a single account that failed (--account)
+# Processes only that account; all other accounts are untouched.
+# Works for both start and end runs.
+python API_Fetch_Data/api_metatrader5_updated.py start --account 89088177
+python API_Fetch_Data/api_metatrader5_updated.py end   --account 89088177
 ```
+
+> **Re-running after login failures:** If one or more accounts failed during a start run, simply re-run the script (with or without `--account`). Accounts that already have a complete row are skipped automatically. Accounts that have a partial row (blank balance from a previous login failure) are detected and filled in — no manual sheet edits required.
 
 **Output:** `Acc_data` sheet in Google Sheets (`Date`, `Account-ID`, `StartdayBalance`, `StartdayEquity`, `EnddayBalance`, `EnddayEquity`, `Status`)
 
