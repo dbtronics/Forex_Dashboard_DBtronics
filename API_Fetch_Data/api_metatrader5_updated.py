@@ -826,17 +826,26 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account
     }
 
 
-def fetch_account_info(run_type):
+def fetch_account_info(run_type, single_account=None):
     """
     Main function — connects to Google Sheets, loops through all Active MT5 accounts,
     fetches balance & equity, writes to Acc_data, then sends SMS notification.
 
-    run_type: 'start' or 'end'
+    run_type:       'start' or 'end'
+    single_account: optional account ID string — when provided, only that account is
+                    processed (used for targeted re-runs after a login failure).
     """
     client = get_gsheet_client()
 
     # Read credentials, Acc_data, and employee-account mapping once per run
     credentials   = get_credentials_from_sheet(client)
+
+    if single_account:
+        credentials = [c for c in credentials if c['ID'] == single_account]
+        if not credentials:
+            log_warn(f"Account {single_account} not found or not Active in Account sheet. Exiting.")
+            return
+        log(f"Single-account mode: processing only account {single_account}")
     emp_map       = get_emp_acc_map(client)
     db            = client.open(SPREADSHEET_NAME)
     acc_data_ws   = db.worksheet(ACC_DATA_SHEET)
@@ -974,18 +983,32 @@ def fetch_account_info(run_type):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-# Expects exactly one argument: 'start' or 'end'
-# Example: python api_metatrader5_updated.py start
-if len(sys.argv) != 2 or sys.argv[1] not in ('start', 'end'):
-    print("Usage: python api_metatrader5_updated.py start|end")
-    print("  start → records StartdayBalance and StartdayEquity (run at 4 PM MST)")
-    print("  end   → records EnddayBalance and EnddayEquity (run at 3 PM MST next day)")
+# Required argument : 'start' or 'end'
+# Optional argument : --account <ID>  (process only one account — for targeted re-runs)
+#
+# Examples:
+#   python api_metatrader5_updated.py start
+#   python api_metatrader5_updated.py end
+#   python api_metatrader5_updated.py start --account 89088177
+#   python api_metatrader5_updated.py end   --account 89088177
+if len(sys.argv) < 2 or sys.argv[1] not in ('start', 'end'):
+    print("Usage: python api_metatrader5_updated.py start|end [--account ACCOUNT_ID]")
+    print("  start            → records StartdayBalance and StartdayEquity (4 PM MST)")
+    print("  end              → records EnddayBalance and EnddayEquity (3 PM MST next day)")
+    print("  --account <ID>   → process only this account (for targeted re-runs)")
     sys.exit(1)
 
-run_type = sys.argv[1]
+run_type       = sys.argv[1]
+single_account = None
+if '--account' in sys.argv:
+    idx = sys.argv.index('--account')
+    if idx + 1 >= len(sys.argv):
+        print("Error: --account requires an account ID argument.")
+        sys.exit(1)
+    single_account = sys.argv[idx + 1]
 
 try:
-    fetch_account_info(run_type)
+    fetch_account_info(run_type, single_account)
     log("Run completed successfully.")
 except Exception as e:
     log_warn(f"Script failed with error: {e}")
