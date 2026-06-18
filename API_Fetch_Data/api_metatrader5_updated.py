@@ -707,13 +707,29 @@ def handle_start_run(acc_data_ws, acc_data_rows, account_id, account_type, accou
     trading_date   = get_date_str(datetime.now() + timedelta(days=1))
     account_id_str = str(account_id)
 
-    # Check if a row already exists for this trading date + account (duplicate start guard)
+    # Check if a row already exists for this trading date + account.
     target_date = parse_sheet_date(trading_date)
     for i, row in enumerate(acc_data_rows[1:], start=2):
         if parse_sheet_date(row[0]) == target_date and str(row[1]).strip() == account_id_str:
+            existing_balance = parse_float(row[2]) if len(row) > 2 else None
+
+            if existing_balance is None:
+                # Row exists but balance is empty — written by a previously failed login.
+                # Fill in the real values now instead of skipping.
+                log(f"  [START] Partial row found for {account_id_str} on {trading_date} "
+                    f"(previous run had no balance). Filling in now.")
+                acc_data_ws.update_cell(i, 3, balance)
+                acc_data_ws.update_cell(i, 4, equity)
+                acc_data_ws.update_cell(i, 7, 'START: OK (retry)')
+                log(f"  [START] Retry done → {account_id_str} | "
+                    f"StartdayBalance={balance}, StartdayEquity={equity}")
+                return {'id': account_id_str, 'type': account_type, 'category': account_category,
+                        'deposit_size': deposit_size, 'daily_drawdown': daily_drawdown,
+                        'profit_target': profit_target, 'status': 'recorded'}
+
+            # Row has real balance data — genuine duplicate start run.
             log_warn(f"  [START] Row already exists for {account_id_str} on {trading_date}. "
                      f"Start run may have been triggered twice. Skipping.")
-            # Append 'START: Duplicate' to the existing status so it's visible in the sheet
             existing = row[6].strip() if len(row) > 6 else ''
             new_status = f"{existing} | START: Duplicate" if existing else 'START: Duplicate'
             acc_data_ws.update_cell(i, 7, new_status)
