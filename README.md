@@ -22,6 +22,7 @@ Forex_Dashboard_DBtronics/
 ├── static/
 │   └── styles.css                  # Dashboard table styling
 ├── TransactionHistory.py           # MT5 deal history exporter (Google Sheets)
+├── TraderMetrics.py                # Trader performance metrics (Google Sheets, on-demand)
 ├── UI_flask.py                     # Flask web application
 ├── requirements.txt                # Python dependencies
 ├── .env                            # Twilio credentials and SMS recipients (excluded from git)
@@ -315,7 +316,73 @@ Fetching 2 days (instead of today only) ensures deals placed after the previous 
 
 ---
 
-### 4. `UI_flask.py` — Flask Web Dashboard
+### 4. `TraderMetrics.py` — Trader Performance Metrics (On-demand)
+
+Calculates statistical trading performance metrics per trader and writes them to the **`Trader Metrics`** tab in `STS Database`. Run manually whenever a fresh metrics snapshot is needed — not scheduled.
+
+**How it works:**
+
+1. Reads `Employee` and `Emp_Acc` sheets from `STS Database` to map account IDs to trader names
+2. Reads `Account` sheet for deposit sizes and daily drawdown limits (used for probability calculations)
+3. Reads every tab in `STS Transaction History` (one tab per account) and collects all closed trades — `EXIT`, `CLOSE_BY`, and `REVERSAL` deals of type `BUY` or `SELL` only. `BALANCE` and `CREDIT` deals are excluded
+4. Groups trades by trader (multiple accounts merged into one row)
+5. Calculates all metrics and writes a full clear-and-rewrite to `Trader Metrics`
+
+**Update behaviour:** Every run clears and rewrites the entire sheet from scratch. This means:
+- Accounts linked in `Emp_Acc` since the last run automatically move from `UNKNOWN TRADER` to the correct trader row
+- New traders appear, removed traders disappear, all numbers reflect the latest deal history
+
+**Metrics calculated (columns A–Z):**
+
+| Column | Metric | What it captures |
+|--------|--------|-----------------|
+| A | Last Updated | Timestamp of this run |
+| B | Trader | Employee name (or `UNKNOWN TRADER`) |
+| C | Accounts | All account IDs contributing trades |
+| D | Days of Data | Calendar span of the sample |
+| E | Total Trades | Sample size |
+| F | Sample Quality | `Sufficient` (≥100) or `Low (N)` |
+| G | Win Rate % | % of closed trades in profit |
+| H | Break-even WR % | Minimum WR needed to profit at this R:R |
+| I | WR Margin % | How far above/below the break-even line |
+| J | Profit Factor | Gross profit ÷ gross loss |
+| K | Net P&L ($) | Total realised profit |
+| L | Avg Win ($) | Average profit on winning trades |
+| M | Avg Loss ($) | Average loss on losing trades (negative) |
+| N | R:R | Avg Win ÷ Avg Loss |
+| O | EV/Trade ($) | Expected profit per trade — core viability signal |
+| P | Avg Trades/Day | Trade frequency |
+| Q | Daily EV ($) | Expected profit per calendar day |
+| R | Max Loss Streak | Longest consecutive losing run |
+| S | Largest Win ($) | Biggest single trade (outlier check) |
+| T | Largest Loss ($) | Biggest single loss (risk check) |
+| U | Avg Duration (hrs) | Average hold time |
+| V | Manual % | % of trades placed manually vs EA |
+| W | Top Symbol | Most traded instrument |
+| X | Proj. Days to 10% | Linear estimate of days to reach 10% profit target |
+| Y | P(10% before ruin) % | Monte Carlo probability of hitting +10% before the ruin threshold |
+| Z | Notes | `⚠` flag for unlinked accounts needing Emp_Acc assignment |
+
+**Glossary (columns AB–AE):** Every metric has an accompanying row in the sheet explaining its calculation, what it means, and the green/red flag thresholds — so the sheet is self-documenting.
+
+**`P(10% before ruin)` detail:**
+Uses a Monte Carlo simulation (3,000 runs) where each simulated trade either wins `avg_win_pct` or loses `avg_loss_pct` of the account, with the trader's historical win rate as the probability. The simulation stops when equity reaches +10% (success) or hits the ruin threshold (failure). The ruin threshold defaults to −5% but is overridden by the account's `Daily Drawdown` limit from the `Account` sheet if available.
+
+**`UNKNOWN TRADER` handling:**
+Accounts with no entry in `Emp_Acc` are grouped into a single `UNKNOWN TRADER` row. The `Notes` column lists the specific account IDs that need to be assigned. Once linked in `Emp_Acc`, the next run automatically moves them to the correct trader row.
+
+**Usage:**
+```bash
+python TraderMetrics.py
+```
+
+**Output:** `Trader Metrics` tab in `STS Database` Google Spreadsheet.
+
+**Logging:** Appends to the same `cron.log` as the other scripts.
+
+---
+
+### 5. `UI_flask.py` — Flask Web Dashboard
 
 A lightweight Flask application that serves a browser-based dashboard displaying live MT5 account data.
 
