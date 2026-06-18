@@ -91,138 +91,160 @@ DATA_HEADERS = [
 GLOSSARY_COL_OFFSET = len(DATA_HEADERS) + 1   # 0-based column index where glossary begins
 
 GLOSSARY = [
-    ['Field', 'Calculation', 'What it means', 'Green / Red flag'],
+    ['Field', 'Calculation', 'What it means', 'Green / Red flag', 'Range'],
     [
         'Win Rate %',
         'Winners ÷ Total Trades × 100',
         'Percentage of closed trades that ended in profit. Meaningless in isolation — must be read alongside R:R.',
         'Context-dependent. 35% WR with 2.5 R:R beats 65% WR with 0.4 R:R.',
+        'Poor <35% | Average 35–50% | Good 50–65% | Excellent >65%',
     ],
     [
         'Break-even WR %',
         '1 ÷ (1 + R:R) × 100',
         'Minimum win rate needed to break even at this trader\'s R:R. The profitability threshold line.',
         'Trader must stay above this. Falling below = losing money regardless of appearance.',
+        'Calculated value — compare against Win Rate %. No universal range.',
     ],
     [
         'WR Margin %',
         'Win Rate % − Break-even WR %',
         'How far the trader sits above (+) or below (−) the profitability threshold.',
         'Positive = viable system. Negative = losing system. Larger margin = more robust to variance.',
+        'Losing <0% | Marginal 0–5% | Good 5–15% | Excellent >15%',
     ],
     [
         'Profit Factor',
         'Gross Profit ÷ Gross Loss',
         'Dollars earned for every dollar lost. Most reliable single profitability indicator.',
         '>1.5 decent | >2.0 strong | <1.0 losing money',
+        'Losing <1.0 | Marginal 1.0–1.5 | Good 1.5–2.0 | Excellent >2.0',
     ],
     [
         'Net P&L ($)',
         'Sum of all closed trade Net Profit values',
         'Total realised profit or loss across all accounts.',
         'Must be positive over a sufficient sample. Small positive on low sample = inconclusive.',
+        'Relative to account size — compare traders by Profit Factor and EV/Trade instead.',
     ],
     [
         'Avg Win ($)',
         'Sum of winning trade profits ÷ number of winners',
         'Average dollar gain on a trade that closes in profit.',
         'Should exceed Avg Loss in absolute terms if win rate is below 50%.',
+        'Relative to account size — what matters is Avg Win vs Avg Loss ratio (R:R).',
     ],
     [
         'Avg Loss ($)',
         'Sum of losing trade losses ÷ number of losers  (shown negative)',
         'Average dollar loss on a losing trade.',
         'If larger than Avg Win, trader needs >50% WR just to break even.',
+        'Relative to account size — what matters is Avg Loss vs Avg Win ratio (R:R).',
     ],
     [
         'R:R',
         'Avg Win ÷ |Avg Loss|',
         'Return earned per unit of risk. A 1:2 R:R means winning trades are twice the size of losers.',
         '>1.0 = wins bigger than losses | <1.0 = needs high win rate to compensate',
+        'Poor <0.8 | Average 0.8–1.2 | Good 1.2–2.0 | Excellent >2.0',
     ],
     [
         'EV/Trade ($)',
         '(Win Rate × Avg Win) − (Loss Rate × |Avg Loss|)',
         'Expected dollar profit per trade over a large sample. The core viability signal.',
         'Must be positive. Negative EV = guaranteed long-run loss regardless of short-term results.',
+        'Losing <$0 | Marginal $0–$10 | Good $10–$50 | Excellent >$50  (*scales with account size)',
     ],
     [
         'Avg Trades/Day',
         'Total Trades ÷ Calendar days between first and last trade',
         'Trade frequency. Used to convert per-trade metrics into time-based projections.',
         'Very low (<0.3) = projections span years. Very high (>20) = scalping style.',
+        'Very Low <0.3 | Low 0.3–1 | Medium 1–5 | High >5  (no single best — depends on style)',
     ],
     [
         'Daily EV ($)',
         'EV/Trade × Avg Trades/Day',
         'Expected dollar profit generated per calendar day at historical pace.',
         'Positive and stable = consistent system. Near zero = marginal edge.',
+        'Relative to account size — positive is required; compare proportionally across traders.',
     ],
     [
         'Max Loss Streak',
         'Longest consecutive run of losing trades in chronological order',
         'Worst observed drawdown in trade count. Tests account sizing and psychological resilience.',
         '>10 consecutive losses is dangerous. Account must be sized to withstand the streak.',
+        'Safe <5 | Manageable 5–8 | Caution 8–12 | Dangerous >12',
     ],
     [
         'Largest Win ($)',
         'Maximum single trade net profit',
         'Biggest single trade. Checks if overall profit is driven by one lucky outlier.',
         'Flag if Largest Win > 5× Avg Win — results may not be repeatable.',
+        'Flag if >5× Avg Win. Otherwise relative to account size — no fixed range.',
     ],
     [
         'Largest Loss ($)',
         'Minimum single trade net profit (most negative)',
         'Biggest single trade loss. Checks consistency of risk management.',
         'Flag if |Largest Loss| > 5× |Avg Loss| — indicates a risk management failure.',
+        'Flag if >5× Avg Loss. Otherwise relative to account size — no fixed range.',
     ],
     [
         'Avg Duration (hrs)',
         'Mean of Duration(s) column ÷ 3600, exit deals only',
         'Average time a position is held open. Characterises trading style.',
         'Context only. Scalper (<1 hr) vs swing trader (>24 hrs) have different risk profiles.',
+        'Scalper <1hr | Intraday 1–8hr | Swing 8–24hr | Position >24hr  (no single best)',
     ],
     [
         'Manual %',
         'Trades with Magic Number = 0 ÷ Total Trades × 100',
         'Percentage of trades placed manually vs by an automated EA/bot.',
         'Many prop firms restrict EAs. 100% manual is safest for compliance.',
+        'Risk <50% manual | Caution 50–90% | Good 90–99% | Ideal 100% manual',
     ],
     [
         'Top Symbol',
         'Most frequently traded instrument across all closed trades',
         'Primary instrument the trader focuses on.',
         'Cross-check against account rules — some prop firms restrict exotics or indices.',
+        'No numeric range — verify instrument is allowed under account rules.',
     ],
     [
         'Proj. Days to 10%',
         '(Account Size × 10%) ÷ Daily EV',
-        'Linear estimate of calendar days to reach the 10% profit target at historical pace.',
-        'Optimistic ceiling — ignores bad streaks. Always read alongside P(10% before ruin).',
+        'Linear estimate of calendar days to reach the 10% profit target at historical pace. Optimistic — ignores bad streaks.',
+        'Always read alongside P(10% before ruin). A fast projection with low P(target) is misleading.',
+        'Fast <30d | Good 30–60d | Average 60–120d | Slow >120d',
     ],
     [
         'P(10% before ruin) %',
         'Monte Carlo simulation (3,000 runs) using Win Rate and Avg Win/Loss as % of account size',
-        'Probability of reaching +10% profit before hitting the ruin threshold (account daily drawdown limit, default −5%).',
-        '>70% strong chance | 40–70% uncertain | <40% unlikely at current performance',
+        'Probability of reaching +10% profit before hitting the ruin threshold (account daily drawdown limit, default −5%). Most honest forward-looking metric.',
+        'This is the single most important number for vetting a trader on a funded account.',
+        'Poor <40% | Uncertain 40–60% | Good 60–75% | Strong >75%',
     ],
     [
         'Notes',
         'Auto-generated by script',
         'Flags accounts with no employee assignment in the Emp_Acc sheet.',
         '⚠ warning = account needs to be assigned to an employee in Emp_Acc before next run.',
+        'No range — action required if ⚠ is present.',
     ],
     [
         'Sample Quality',
         'Sufficient if Total Trades ≥ 100, else Low (N)',
         'Statistical reliability rating. Law of large numbers requires volume before metrics stabilise.',
-        '<100 trades = luck dominates | 100–200 = usable | 200+ = statistically meaningful',
+        '<100 trades = luck dominates. All other metrics are unreliable until sample is sufficient.',
+        'Insufficient <50 | Low 50–100 | Usable 100–200 | Reliable >200',
     ],
     [
         'Days of Data',
         'Date of last closed trade − Date of first closed trade + 1',
         'Calendar span covered by the trade sample. Context for Avg Trades/Day.',
-        'Short span + high trade count = high frequency. Long span + low count = infrequent.',
+        'Short span with few trades = very limited view. Longer always better.',
+        'Short <30d | Medium 30–90d | Good 90–180d | Strong >180d',
     ],
 ]
 
@@ -555,13 +577,24 @@ def run():
         total_dep = sum(dep_values) if dep_values else None
         ruin_pct  = min(draw_values) if draw_values else DEFAULT_RUIN_PCT
 
+        notes = ''
+        if trader == 'UNKNOWN TRADER':
+            # UNKNOWN TRADER is a mix of unlinked accounts — metrics would be
+            # misleading. Show N/A for everything and flag the account IDs.
+            notes = f"⚠ No employee linked — assign in Emp_Acc: {', '.join(sorted(unlinked_accs))}"
+            na    = 'N/A'
+            output_rows.append([
+                last_updated, trader, ', '.join(accs),
+                na, na, na, na, na, na, na, na, na, na,
+                na, na, na, na, na, na, na, na, na, na,
+                na, na, notes,
+            ])
+            log(f"  UNKNOWN TRADER: {len(trades)} trades across {len(accs)} unlinked accounts — metrics suppressed")
+            continue
+
         m = calculate_metrics(trades, total_dep, ruin_pct)
         if m is None:
             continue
-
-        notes = ''
-        if trader == 'UNKNOWN TRADER':
-            notes = f"⚠ No employee linked — assign in Emp_Acc: {', '.join(sorted(unlinked_accs))}"
 
         output_rows.append([
             last_updated,
