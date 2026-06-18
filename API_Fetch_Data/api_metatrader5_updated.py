@@ -765,9 +765,6 @@ def handle_end_run(acc_data_ws, acc_data_rows, account_id, account_type, account
     start_equity  = None
 
     target_date = parse_sheet_date(trading_date)
-    log(f"  [DEBUG END] trading_date='{trading_date}' → parsed={target_date} | "
-        f"first row[0]='{acc_data_rows[1][0] if len(acc_data_rows) > 1 else 'N/A'}' → "
-        f"parsed={parse_sheet_date(acc_data_rows[1][0]) if len(acc_data_rows) > 1 else 'N/A'}")
     for i, row in enumerate(acc_data_rows[1:], start=2):  # gspread rows are 1-indexed; skip header
         if parse_sheet_date(row[0]) == target_date and str(row[1]).strip() == account_id_str:
             row_index     = i
@@ -850,7 +847,6 @@ def fetch_account_info(run_type, single_account=None):
     db            = client.open(SPREADSHEET_NAME)
     acc_data_ws   = db.worksheet(ACC_DATA_SHEET)
     acc_data_rows = acc_data_ws.get_all_values()
-    log(f"  [DEBUG] Sample acc_data dates (rows 2-6): {[r[0] for r in acc_data_rows[1:6]]}")
 
     # run_date is used in SMS reports.
     # For start: show tomorrow's date (the trading day being opened).
