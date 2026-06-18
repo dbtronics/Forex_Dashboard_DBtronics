@@ -262,54 +262,54 @@ COLUMN_CF_RULES = [
     # Days of Data — higher is better
     (3,  [('NUMBER_LESS',       ['30'],  CF_RED),
           ('NUMBER_LESS',       ['90'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['90'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['90'],  CF_GREEN)]),
     # Total Trades — higher is better
     (4,  [('NUMBER_LESS',       ['50'],  CF_RED),
           ('NUMBER_LESS',       ['200'], CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['200'], CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['200'], CF_GREEN)]),
     # Win Rate % — higher is better
     (6,  [('NUMBER_LESS',       ['35'],  CF_RED),
           ('NUMBER_LESS',       ['50'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['50'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['50'],  CF_GREEN)]),
     # WR Margin % — higher is better; negative = losing system
     (8,  [('NUMBER_LESS',       ['0'],   CF_RED),
           ('NUMBER_LESS',       ['5'],   CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['5'],   CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['5'],   CF_GREEN)]),
     # Profit Factor — higher is better
     (9,  [('NUMBER_LESS',       ['1.0'], CF_RED),
           ('NUMBER_LESS',       ['1.5'], CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['1.5'], CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['1.5'], CF_GREEN)]),
     # Net P&L — positive = green, negative = red (no yellow; sign is the signal)
     (10, [('NUMBER_LESS',       ['0'],   CF_RED),
-          ('NUMBER_GREATER_EQ', ['0'],   CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['0'],   CF_GREEN)]),
     # R:R — higher is better
     (13, [('NUMBER_LESS',       ['0.8'], CF_RED),
           ('NUMBER_LESS',       ['1.2'], CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['1.2'], CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['1.2'], CF_GREEN)]),
     # EV/Trade — higher is better; negative = losing system
     (14, [('NUMBER_LESS',       ['0'],   CF_RED),
           ('NUMBER_LESS',       ['10'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['10'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['10'],  CF_GREEN)]),
     # Daily EV — higher is better
     (16, [('NUMBER_LESS',       ['0'],   CF_RED),
           ('NUMBER_LESS',       ['50'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['50'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['50'],  CF_GREEN)]),
     # Max Loss Streak — LOWER is better (inverted)
     (17, [('NUMBER_GREATER',    ['12'],  CF_RED),
-          ('NUMBER_GREATER_EQ', ['5'],   CF_YELLOW),
+          ('NUMBER_GREATER_THAN_EQ', ['5'],   CF_YELLOW),
           ('NUMBER_LESS',       ['5'],   CF_GREEN)]),
     # Manual % — higher is better (100% = fully manual)
     (21, [('NUMBER_LESS',       ['50'],  CF_RED),
           ('NUMBER_LESS',       ['90'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['90'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['90'],  CF_GREEN)]),
     # Proj. Days to 10% — LOWER is better (inverted)
     (23, [('NUMBER_GREATER',    ['120'], CF_RED),
-          ('NUMBER_GREATER_EQ', ['30'],  CF_YELLOW),
+          ('NUMBER_GREATER_THAN_EQ', ['30'],  CF_YELLOW),
           ('NUMBER_LESS',       ['30'],  CF_GREEN)]),
     # P(10% before ruin) % — higher is better
     (24, [('NUMBER_LESS',       ['40'],  CF_RED),
           ('NUMBER_LESS',       ['60'],  CF_YELLOW),
-          ('NUMBER_GREATER_EQ', ['60'],  CF_GREEN)]),
+          ('NUMBER_GREATER_THAN_EQ', ['60'],  CF_GREEN)]),
 ]
 
 # ── Google Sheets auth ────────────────────────────────────────────────────────
