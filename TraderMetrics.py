@@ -28,7 +28,7 @@ import sys
 import logging
 import random
 from datetime import datetime
-from collections import Counter
+from collections import Counter, defaultdict
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -451,18 +451,13 @@ def monte_carlo_probability(win_rate_pct, avg_win_pct, avg_loss_pct,
 
 
 # ── Metrics calculation ───────────────────────────────────────────────────────
-def calculate_metrics(trades, account_info, ruin_pct):
+def calculate_account_metrics(trades, deposit_size, ruin_pct):
     """
-    trades       : list of dicts — net_profit, account_id, duration_s, magic, symbol, date
-    account_info : {acc_id -> {'deposit_size': float|None, ...}} — used to normalize
-                   each trade's profit against the deposit of the account it came from.
-                   This fixes multi-account bias: a trader with 3 × $100k accounts is
-                   not penalised vs one with a single $100k account.
-    ruin_pct     : ruin threshold % (strictest drawdown across accounts, or default)
-
-    Returns a dict of all metric values, or None if trades is empty.
+    Calculate all metrics for a SINGLE account's trades, normalized against
+    that account's deposit_size. Returns a raw dict used by aggregate_metrics,
+    or None if there are no trades or no deposit size.
     """
-    if not trades:
+    if not trades or not deposit_size or deposit_size <= 0:
         return None
 
     profits = [t['net_profit'] for t in trades]
@@ -473,17 +468,14 @@ def calculate_metrics(trades, account_info, ruin_pct):
     gross_profit = sum(winners) if winners else 0.0
     gross_loss   = abs(sum(losers)) if losers else 0.0
 
-    win_rate      = len(winners) / total * 100
-    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else '∞'
-    avg_win       = gross_profit / len(winners) if winners else 0.0
-    avg_loss      = gross_loss   / len(losers)  if losers  else 0.0   # positive value
-    rr_num        = avg_win / avg_loss if avg_loss > 0 else 0.0
-    rr            = round(rr_num, 2)   if avg_loss > 0 else '∞'
-    ev            = (win_rate / 100 * avg_win) - ((1 - win_rate / 100) * avg_loss)
-    net_pnl       = sum(profits)
+    win_rate = len(winners) / total * 100
+    avg_win  = gross_profit / len(winners) if winners else 0.0
+    avg_loss = gross_loss   / len(losers)  if losers  else 0.0   # positive
 
-    breakeven_wr = (1 / (1 + rr_num) * 100) if rr_num > 0 else 50.0
-    wr_margin    = win_rate - breakeven_wr
+    # Normalized % — the core of the per-account approach
+    avg_win_pct  = avg_win  / deposit_size * 100
+    avg_loss_pct = avg_loss / deposit_size * 100
+    ev_pct       = (win_rate / 100 * avg_win_pct) - ((1 - win_rate / 100) * avg_loss_pct)
 
     # Max consecutive loss streak
     max_streak = cur = 0
@@ -494,73 +486,22 @@ def calculate_metrics(trades, account_info, ruin_pct):
         else:
             cur = 0
 
-    largest_win  = max(profits)
-    largest_loss = min(profits)
-
-    # Average hold duration (exit trades only, duration must be > 0)
-    durations   = [t['duration_s'] for t in trades if t.get('duration_s', 0) > 0]
-    avg_dur_hrs = round(sum(durations) / len(durations) / 3600, 1) if durations else 0.0
-
-    # Manual trade percentage
-    manual_pct = round(sum(1 for t in trades if t.get('magic', 1) == 0) / total * 100, 1)
-
-    # Most traded symbol
+    # Duration, manual %, symbol
+    durations  = [t['duration_s'] for t in trades if t.get('duration_s', 0) > 0]
+    manual_cnt = sum(1 for t in trades if t.get('magic', 1) == 0)
     symbols    = [t['symbol'] for t in trades if t.get('symbol')]
-    top_symbol = Counter(symbols).most_common(1)[0][0] if symbols else '—'
 
-    # Active trading days — sum the span of each account separately.
-    # Using first-to-last across ALL accounts would include the gaps between
-    # passed/closed accounts (waiting for a new account to be set up), which
-    # inflates days_of_data and deflates avg_trades_per_day.
-    from collections import defaultdict
-    account_date_map = defaultdict(list)
+    # Active days for this account
+    dates = []
     for t in trades:
         try:
-            d = datetime.strptime(t['date'], '%Y.%m.%d')
-            account_date_map[t.get('account_id', '_')].append(d)
+            dates.append(datetime.strptime(t['date'], '%Y.%m.%d'))
         except (ValueError, TypeError):
             pass
+    days_active = max(1, (max(dates) - min(dates)).days + 1) if len(dates) >= 2 else 1
 
-    total_active_days = 0
-    all_dates         = []
-    for acc_dates in account_date_map.values():
-        if acc_dates:
-            total_active_days += (max(acc_dates) - min(acc_dates)).days + 1
-            all_dates.extend(acc_dates)
-
-    days_of_data       = max(1, total_active_days)
-    avg_trades_per_day = round(total / days_of_data, 1)
-    daily_ev           = round(ev * avg_trades_per_day, 2)
-
-    # ── Per-trade normalization (account-size agnostic) ───────────────────────
-    # Each trade's profit is expressed as % of the deposit of the account it
-    # came from. This means a trader with 3 × $100k accounts is treated the
-    # same as one with a single $100k account — only their % edge matters.
-    win_pcts  = []
-    loss_pcts = []
-    for t in trades:
-        dep = (account_info or {}).get(t.get('account_id', ''), {})
-        dep = dep.get('deposit_size') if dep else None
-        if not dep or dep <= 0:
-            continue
-        pct = t['net_profit'] / dep * 100
-        if pct > 0:
-            win_pcts.append(pct)
-        elif pct < 0:
-            loss_pcts.append(abs(pct))
-
-    avg_win_pct  = sum(win_pcts)  / len(win_pcts)  if win_pcts  else 0.0
-    avg_loss_pct = sum(loss_pcts) / len(loss_pcts) if loss_pcts else 0.0
-    ev_pct       = (win_rate / 100 * avg_win_pct) - ((1 - win_rate / 100) * avg_loss_pct)
-    daily_ev_pct = ev_pct * avg_trades_per_day
-
-    # Projections: purely % based so they are account-size agnostic
-    proj_days_5  = round(TARGET_PCT_5  / daily_ev_pct, 1) if daily_ev_pct > 0 else None
-    proj_days_10 = round(TARGET_PCT_10 / daily_ev_pct, 1) if daily_ev_pct > 0 else None
-
-    # Monte Carlo: uses correctly normalized per-account % values
-    p_target_5  = None
-    p_target_10 = None
+    # Monte Carlo
+    p_target_5 = p_target_10 = None
     if avg_win_pct > 0 and avg_loss_pct > 0:
         p_target_5  = monte_carlo_probability(
             win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_5,  ruin_pct
@@ -570,9 +511,116 @@ def calculate_metrics(trades, account_info, ruin_pct):
         )
 
     return {
+        # poolable raw values
+        'total_trades':  total,
+        'winners':       len(winners),
+        'losers':        len(losers),
+        'gross_profit':  gross_profit,
+        'gross_loss':    gross_loss,
+        'net_pnl':       sum(profits),
+        'duration_sum':  sum(durations),
+        'duration_cnt':  len(durations),
+        'manual_cnt':    manual_cnt,
+        'symbols':       symbols,
+        'days_active':   days_active,
+        # per-account normalized values (used for weighted aggregation)
+        'win_rate':      win_rate,
+        'avg_win':       avg_win,
+        'avg_loss':      avg_loss,
+        'avg_win_pct':   avg_win_pct,
+        'avg_loss_pct':  avg_loss_pct,
+        'ev_pct':        ev_pct,
+        # worst-case / outlier values
+        'max_loss_streak': max_streak,
+        'largest_win':     max(profits),
+        'largest_loss':    min(profits),
+        # per-account probability
+        'p_target_5':    p_target_5,
+        'p_target_10':   p_target_10,
+    }
+
+
+def aggregate_metrics(account_results):
+    """
+    Combine per-account metric dicts into a single trader-level metric set.
+
+    Pooled from raw counts  : Win Rate, Profit Factor (uses gross totals)
+    Weighted avg by trades  : Avg Win/Loss %, EV%, Duration, Manual %
+    Summed across accounts  : Net P&L, Total Trades, Days of Data
+    Max/min across accounts : Max Loss Streak, Largest Win/Loss
+    Avg across accounts     : P(5%), P(10%)  — each account is independent experiment
+    """
+    results = [r for r in account_results if r is not None]
+    if not results:
+        return None
+
+    total_trades  = sum(r['total_trades'] for r in results)
+    total_winners = sum(r['winners']      for r in results)
+    gross_profit  = sum(r['gross_profit'] for r in results)
+    gross_loss    = sum(r['gross_loss']   for r in results)
+    net_pnl       = sum(r['net_pnl']      for r in results)
+
+    # Win rate and profit factor from pooled totals — most accurate
+    win_rate      = total_winners / total_trades * 100
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else '∞'
+
+    # Weighted averages by trade count
+    def wavg(key):
+        return sum(r[key] * r['total_trades'] for r in results) / total_trades
+
+    avg_win_pct  = wavg('avg_win_pct')
+    avg_loss_pct = wavg('avg_loss_pct')
+    avg_win      = wavg('avg_win')
+    avg_loss     = wavg('avg_loss')
+
+    rr_num = avg_win_pct / avg_loss_pct if avg_loss_pct > 0 else 0.0
+    rr     = round(rr_num, 2) if avg_loss_pct > 0 else '∞'
+
+    ev_pct = (win_rate / 100 * avg_win_pct) - ((1 - win_rate / 100) * avg_loss_pct)
+    ev_dollar = (win_rate / 100 * avg_win)  - ((1 - win_rate / 100) * avg_loss)
+
+    breakeven_wr = (1 / (1 + rr_num) * 100) if rr_num > 0 else 50.0
+    wr_margin    = win_rate - breakeven_wr
+
+    # Days and frequency
+    days_of_data       = sum(r['days_active'] for r in results)
+    avg_trades_per_day = round(total_trades / max(1, days_of_data), 1)
+    daily_ev_pct       = ev_pct * avg_trades_per_day
+    daily_ev_dollar    = round(ev_dollar * avg_trades_per_day, 2)
+
+    # Projections from aggregated daily EV %
+    proj_days_5  = round(TARGET_PCT_5  / daily_ev_pct, 1) if daily_ev_pct > 0 else None
+    proj_days_10 = round(TARGET_PCT_10 / daily_ev_pct, 1) if daily_ev_pct > 0 else None
+
+    # P(target): simple average across accounts — each account is an independent experiment
+    def avg_prob(key):
+        valid = [r[key] for r in results if r[key] is not None]
+        return round(sum(valid) / len(valid), 1) if valid else None
+
+    p_target_5  = avg_prob('p_target_5')
+    p_target_10 = avg_prob('p_target_10')
+
+    # Worst-case streak and outlier trades across all accounts
+    max_loss_streak = max(r['max_loss_streak'] for r in results)
+    largest_win     = max(r['largest_win']     for r in results)
+    largest_loss    = min(r['largest_loss']    for r in results)
+
+    # Duration weighted average
+    dur_sum = sum(r['duration_sum'] for r in results)
+    dur_cnt = sum(r['duration_cnt'] for r in results)
+    avg_dur_hrs = round(dur_sum / dur_cnt / 3600, 1) if dur_cnt > 0 else 0.0
+
+    # Manual % weighted by trade count
+    manual_pct = round(sum(r['manual_cnt'] for r in results) / total_trades * 100, 1)
+
+    # Top symbol across all accounts
+    all_symbols = [s for r in results for s in r['symbols']]
+    top_symbol  = Counter(all_symbols).most_common(1)[0][0] if all_symbols else '—'
+
+    return {
         'days_of_data':    days_of_data,
-        'total_trades':    total,
-        'sample_quality':  'Sufficient' if total >= MIN_SAMPLE else f'Low ({total})',
+        'total_trades':    total_trades,
+        'sample_quality':  'Sufficient' if total_trades >= MIN_SAMPLE else f'Low ({total_trades})',
         'win_rate':        round(win_rate, 1),
         'breakeven_wr':    round(breakeven_wr, 1),
         'wr_margin':       round(wr_margin, 1),
@@ -581,10 +629,10 @@ def calculate_metrics(trades, account_info, ruin_pct):
         'avg_win':         round(avg_win, 2),
         'avg_loss':        round(-avg_loss, 2),
         'rr':              rr,
-        'ev_per_trade':    round(ev, 2),
+        'ev_per_trade':    round(ev_dollar, 2),
         'avg_trades_day':  avg_trades_per_day,
-        'daily_ev':        daily_ev,
-        'max_loss_streak': max_streak,
+        'daily_ev':        daily_ev_dollar,
+        'max_loss_streak': max_loss_streak,
         'largest_win':     round(largest_win, 2),
         'largest_loss':    round(largest_loss, 2),
         'avg_dur_hrs':     avg_dur_hrs,
@@ -787,6 +835,18 @@ def run():
                        if a in account_info and account_info[a]['daily_drawdown']]
         ruin_pct = min(draw_values) if draw_values else DEFAULT_RUIN_PCT
 
+        # Split trades by account, calculate per-account metrics, then aggregate
+        trades_by_acc = defaultdict(list)
+        for t in trades:
+            trades_by_acc[t['account_id']].append(t)
+
+        per_account = []
+        for acc_id, acc_trades in trades_by_acc.items():
+            dep = (account_info.get(acc_id) or {}).get('deposit_size')
+            per_account.append(calculate_account_metrics(acc_trades, dep, ruin_pct))
+            log(f"    {acc_id}: {len(acc_trades)} trades | deposit ${dep:,.0f}" if dep else
+                f"    {acc_id}: {len(acc_trades)} trades | deposit unknown")
+
         notes = ''
         if trader == 'UNKNOWN TRADER':
             # UNKNOWN TRADER is a mix of unlinked accounts — metrics would be
@@ -802,7 +862,7 @@ def run():
             log(f"  UNKNOWN TRADER: {len(trades)} trades across {len(accs)} unlinked accounts — metrics suppressed")
             continue
 
-        m = calculate_metrics(trades, account_info, ruin_pct)
+        m = aggregate_metrics(per_account)
         if m is None:
             continue
 
