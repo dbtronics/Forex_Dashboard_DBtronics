@@ -451,11 +451,14 @@ def monte_carlo_probability(win_rate_pct, avg_win_pct, avg_loss_pct,
 
 
 # ── Metrics calculation ───────────────────────────────────────────────────────
-def calculate_metrics(trades, total_deposit, ruin_pct):
+def calculate_metrics(trades, account_info, ruin_pct):
     """
-    trades        : list of dicts — net_profit, duration_s, magic, symbol, date
-    total_deposit : combined deposit size for this trader's accounts (float or None)
-    ruin_pct      : ruin threshold % (strictest drawdown across accounts, or default)
+    trades       : list of dicts — net_profit, account_id, duration_s, magic, symbol, date
+    account_info : {acc_id -> {'deposit_size': float|None, ...}} — used to normalize
+                   each trade's profit against the deposit of the account it came from.
+                   This fixes multi-account bias: a trader with 3 × $100k accounts is
+                   not penalised vs one with a single $100k account.
+    ruin_pct     : ruin threshold % (strictest drawdown across accounts, or default)
 
     Returns a dict of all metric values, or None if trades is empty.
     """
@@ -516,27 +519,42 @@ def calculate_metrics(trades, total_deposit, ruin_pct):
     avg_trades_per_day = round(total / days_of_data, 1)
     daily_ev           = round(ev * avg_trades_per_day, 2)
 
-    # Time-based projections and Monte Carlo probabilities (require account size)
-    proj_days_5  = None
-    proj_days_10 = None
-    p_target_5   = None
-    p_target_10  = None
+    # ── Per-trade normalization (account-size agnostic) ───────────────────────
+    # Each trade's profit is expressed as % of the deposit of the account it
+    # came from. This means a trader with 3 × $100k accounts is treated the
+    # same as one with a single $100k account — only their % edge matters.
+    win_pcts  = []
+    loss_pcts = []
+    for t in trades:
+        dep = (account_info or {}).get(t.get('account_id', ''), {})
+        dep = dep.get('deposit_size') if dep else None
+        if not dep or dep <= 0:
+            continue
+        pct = t['net_profit'] / dep * 100
+        if pct > 0:
+            win_pcts.append(pct)
+        elif pct < 0:
+            loss_pcts.append(abs(pct))
 
-    if total_deposit and total_deposit > 0:
-        avg_win_pct  = avg_win  / total_deposit * 100
-        avg_loss_pct = avg_loss / total_deposit * 100
+    avg_win_pct  = sum(win_pcts)  / len(win_pcts)  if win_pcts  else 0.0
+    avg_loss_pct = sum(loss_pcts) / len(loss_pcts) if loss_pcts else 0.0
+    ev_pct       = (win_rate / 100 * avg_win_pct) - ((1 - win_rate / 100) * avg_loss_pct)
+    daily_ev_pct = ev_pct * avg_trades_per_day
 
-        if daily_ev > 0:
-            proj_days_5  = round((total_deposit * TARGET_PCT_5  / 100) / daily_ev, 1)
-            proj_days_10 = round((total_deposit * TARGET_PCT_10 / 100) / daily_ev, 1)
+    # Projections: purely % based so they are account-size agnostic
+    proj_days_5  = round(TARGET_PCT_5  / daily_ev_pct, 1) if daily_ev_pct > 0 else None
+    proj_days_10 = round(TARGET_PCT_10 / daily_ev_pct, 1) if daily_ev_pct > 0 else None
 
-        if avg_loss_pct > 0:
-            p_target_5  = monte_carlo_probability(
-                win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_5,  ruin_pct
-            )
-            p_target_10 = monte_carlo_probability(
-                win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_10, ruin_pct
-            )
+    # Monte Carlo: uses correctly normalized per-account % values
+    p_target_5  = None
+    p_target_10 = None
+    if avg_win_pct > 0 and avg_loss_pct > 0:
+        p_target_5  = monte_carlo_probability(
+            win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_5,  ruin_pct
+        )
+        p_target_10 = monte_carlo_probability(
+            win_rate, avg_win_pct, avg_loss_pct, TARGET_PCT_10, ruin_pct
+        )
 
     return {
         'days_of_data':    days_of_data,
@@ -722,6 +740,7 @@ def run():
 
             trader_trades.setdefault(trader, []).append({
                 'net_profit': net_profit,
+                'account_id': acc_id,
                 'duration_s': int(duration_s) if duration_s is not None else 0,
                 'magic':      int(magic)       if magic      is not None else 1,
                 'symbol':     row[4].strip(),
@@ -750,12 +769,10 @@ def run():
         trades = trader_trades[trader]
         accs   = sorted(trader_accs_seen.get(trader, set()))
 
-        # Aggregate deposit size and use strictest drawdown across all accounts
-        dep_values  = [account_info[a]['deposit_size']   for a in accs if a in account_info and account_info[a]['deposit_size']]
-        draw_values = [account_info[a]['daily_drawdown'] for a in accs if a in account_info and account_info[a]['daily_drawdown']]
-
-        total_dep = sum(dep_values) if dep_values else None
-        ruin_pct  = min(draw_values) if draw_values else DEFAULT_RUIN_PCT
+        # Use strictest drawdown limit across all this trader's accounts
+        draw_values = [account_info[a]['daily_drawdown'] for a in accs
+                       if a in account_info and account_info[a]['daily_drawdown']]
+        ruin_pct = min(draw_values) if draw_values else DEFAULT_RUIN_PCT
 
         notes = ''
         if trader == 'UNKNOWN TRADER':
@@ -772,7 +789,7 @@ def run():
             log(f"  UNKNOWN TRADER: {len(trades)} trades across {len(accs)} unlinked accounts — metrics suppressed")
             continue
 
-        m = calculate_metrics(trades, total_dep, ruin_pct)
+        m = calculate_metrics(trades, account_info, ruin_pct)
         if m is None:
             continue
 
