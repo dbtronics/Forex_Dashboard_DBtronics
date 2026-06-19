@@ -41,7 +41,7 @@ from dotenv import load_dotenv
 from twilio.rest import Client as TwilioClient
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-HISTORY_DAYS     = 30  # days of history loaded on first run (tab doesn't exist yet)
+HISTORY_DAYS     = 90  # days of history loaded on first run (tab doesn't exist yet)
 INCREMENTAL_DAYS = 2   # days fetched from MT5 on subsequent runs (yesterday + today)
 DEDUP_DAYS       = 3   # days of sheet rows scanned for existing ticket numbers
 

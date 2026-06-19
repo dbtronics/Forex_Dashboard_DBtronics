@@ -508,14 +508,27 @@ def calculate_metrics(trades, account_info, ruin_pct):
     symbols    = [t['symbol'] for t in trades if t.get('symbol')]
     top_symbol = Counter(symbols).most_common(1)[0][0] if symbols else '—'
 
-    # Calendar days of data
-    dates = []
+    # Active trading days — sum the span of each account separately.
+    # Using first-to-last across ALL accounts would include the gaps between
+    # passed/closed accounts (waiting for a new account to be set up), which
+    # inflates days_of_data and deflates avg_trades_per_day.
+    from collections import defaultdict
+    account_date_map = defaultdict(list)
     for t in trades:
         try:
-            dates.append(datetime.strptime(t['date'], '%Y.%m.%d'))
+            d = datetime.strptime(t['date'], '%Y.%m.%d')
+            account_date_map[t.get('account_id', '_')].append(d)
         except (ValueError, TypeError):
             pass
-    days_of_data       = max(1, (max(dates) - min(dates)).days + 1) if len(dates) >= 2 else 1
+
+    total_active_days = 0
+    all_dates         = []
+    for acc_dates in account_date_map.values():
+        if acc_dates:
+            total_active_days += (max(acc_dates) - min(acc_dates)).days + 1
+            all_dates.extend(acc_dates)
+
+    days_of_data       = max(1, total_active_days)
     avg_trades_per_day = round(total / days_of_data, 1)
     daily_ev           = round(ev * avg_trades_per_day, 2)
 
