@@ -561,6 +561,25 @@ def run():
                  "Check that MT5 terminal is open and Python API is enabled in its settings.")
         return
 
+    # Wait for the terminal to have an active account session.
+    # mt5.initialize() opens the IPC pipe but the terminal still needs a base
+    # account logged in before mt5.login() switching works. This happens when
+    # MT5 restarts fresh — configure MT5 auto-login to avoid this entirely.
+    log("Waiting for MT5 terminal to reach active state...")
+    terminal_ready = False
+    for _ in range(12):   # wait up to 60 seconds
+        info = mt5.terminal_info()
+        if info and info.connected:
+            terminal_ready = True
+            break
+        time.sleep(5)
+
+    if not terminal_ready:
+        log_warn("MT5 terminal connected via IPC but has no active account session. "
+                 "Configure MT5 auto-login so it reconnects automatically on startup.")
+        return
+
+    log("MT5 terminal is active — proceeding.")
     results = []
     for cred in credentials:
         log("-" * 40)

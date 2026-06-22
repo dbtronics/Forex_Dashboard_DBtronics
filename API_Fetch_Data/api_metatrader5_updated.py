@@ -58,6 +58,23 @@ if not _mt5_initialized:
           "Check that MT5 terminal is open and Python API is enabled in its settings.")
     sys.exit(1)
 
+# Wait for the terminal to have an active account session.
+# mt5.initialize() opens the IPC pipe but the terminal needs a base account
+# logged in before mt5.login() switching works. Configure MT5 auto-login
+# (File → Login → Save account info) to avoid this on unattended restarts.
+_terminal_ready = False
+for _ in range(12):   # wait up to 60 seconds
+    _info = mt5.terminal_info()
+    if _info and _info.connected:
+        _terminal_ready = True
+        break
+    time.sleep(5)
+
+if not _terminal_ready:
+    print("MT5 terminal connected via IPC but has no active account session. "
+          "Configure MT5 auto-login so it reconnects automatically on startup.")
+    sys.exit(1)
+
 # ── Load environment variables from .env ─────────────────────────────────────
 # .env lives in the project root (one level up from this script).
 # It contains Twilio credentials and SMS recipient numbers.
