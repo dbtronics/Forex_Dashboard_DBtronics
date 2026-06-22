@@ -440,7 +440,8 @@ def export_account(dest_wb, cred):
         # login does not cascade and cause all subsequent accounts to fail too.
         mt5.shutdown()
         time.sleep(2)
-        mt5.initialize()
+        if not mt5.initialize():
+            log_warn(f"  MT5 re-initialize() failed after reset: {mt5.last_error()}")
         return {'account_num': account_id, 'status': 'skipped', 'reason': 'MT5 login failed'}
 
     account_info = mt5.account_info()
@@ -539,7 +540,26 @@ def run():
 
     emp_map = get_emp_acc_map(client)
     dest_wb = client.open(SPREADSHEET_DEST)
-    mt5.initialize()
+
+    # Initialize MT5 IPC connection with retry.
+    # mt5.initialize() can fail silently (returns False) even when the terminal
+    # is visibly open — e.g. if the terminal is still recovering from a previous
+    # shutdown. All login() calls return -10004 if initialize() was never established.
+    MT5_INIT_RETRIES = 3
+    MT5_INIT_DELAY   = 5
+    initialized = False
+    for attempt in range(1, MT5_INIT_RETRIES + 1):
+        if mt5.initialize():
+            initialized = True
+            break
+        log_warn(f"  MT5 initialize() attempt {attempt}/{MT5_INIT_RETRIES} failed: {mt5.last_error()}")
+        if attempt < MT5_INIT_RETRIES:
+            time.sleep(MT5_INIT_DELAY)
+
+    if not initialized:
+        log_warn("MT5 terminal not responding to Python API after 3 attempts. "
+                 "Check that MT5 terminal is open and Python API is enabled in its settings.")
+        return
 
     results = []
     for cred in credentials:

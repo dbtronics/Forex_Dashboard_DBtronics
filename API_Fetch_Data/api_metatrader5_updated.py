@@ -39,7 +39,24 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 from twilio.rest import Client as TwilioClient
 
-mt5.initialize()
+# Initialize MT5 IPC connection with retry at startup.
+# mt5.initialize() can fail silently (returns False) even when the terminal
+# is visibly open — all login() calls will then return -10004.
+_MT5_INIT_RETRIES = 3
+_MT5_INIT_DELAY   = 5
+_mt5_initialized  = False
+for _attempt in range(1, _MT5_INIT_RETRIES + 1):
+    if mt5.initialize():
+        _mt5_initialized = True
+        break
+    print(f"MT5 initialize() attempt {_attempt}/{_MT5_INIT_RETRIES} failed: {mt5.last_error()}")
+    if _attempt < _MT5_INIT_RETRIES:
+        time.sleep(_MT5_INIT_DELAY)
+
+if not _mt5_initialized:
+    print("MT5 terminal not responding to Python API after 3 attempts. "
+          "Check that MT5 terminal is open and Python API is enabled in its settings.")
+    sys.exit(1)
 
 # ── Load environment variables from .env ─────────────────────────────────────
 # .env lives in the project root (one level up from this script).
@@ -898,7 +915,8 @@ def fetch_account_info(run_type, single_account=None):
             # login does not cascade and cause all subsequent accounts to fail too.
             mt5.shutdown()
             time.sleep(2)
-            mt5.initialize()
+            if not mt5.initialize():
+                log_warn(f"  MT5 re-initialize() failed after reset: {mt5.last_error()}")
             results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
                             'status': 'skipped', 'reason': 'MT5 login failed'})
             # Record the error in Acc_data so it's visible in the sheet:
