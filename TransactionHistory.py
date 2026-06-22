@@ -68,6 +68,10 @@ TWILIO_AUTH_TOKEN  = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
 SMS_RECIPIENTS     = [n.strip() for n in os.getenv('SMS_RECIPIENTS', '').split(',') if n.strip()]
 
+# MT5 default account — logged into at the end of every run so the terminal
+# always has an active session ready for the next scheduled script.
+MT5_DEFAULT_ACCOUNT_ID = os.getenv('MT5_DEFAULT_ACCOUNT_ID', '').strip()
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 # Appends to the same cron.log used by api_metatrader5_updated.py
 logging.basicConfig(
@@ -92,6 +96,28 @@ def get_mst_time():
     """Return current time converted to MST (server runs on CST)."""
     mst = pytz.timezone('US/Mountain')
     return datetime.now(mst)
+
+
+def login_default_account(credentials):
+    """
+    Log into MT5_DEFAULT_ACCOUNT_ID at the end of every run so the terminal
+    retains an active session. mt5.shutdown() only closes the Python IPC pipe —
+    the terminal keeps the last logged-in account alive, preventing
+    'Authorization failed' errors when the next script runs.
+    """
+    if not MT5_DEFAULT_ACCOUNT_ID:
+        return
+    default_cred = next(
+        (c for c in credentials if str(c['ID']) == MT5_DEFAULT_ACCOUNT_ID), None
+    )
+    if not default_cred:
+        log_warn(f"  Default account {MT5_DEFAULT_ACCOUNT_ID} not found in credentials — skipping.")
+        return
+    success = mt5.login(int(default_cred['ID']), default_cred['Password'], default_cred['Server'])
+    if success:
+        log(f"  Default account {MT5_DEFAULT_ACCOUNT_ID} logged in — terminal session active for next run.")
+    else:
+        log_warn(f"  Could not log into default account {MT5_DEFAULT_ACCOUNT_ID}: {mt5.last_error()}")
 
 
 # ── SMS ───────────────────────────────────────────────────────────────────────
@@ -593,6 +619,10 @@ def run():
     for i, part in enumerate(parts, 1):
         log(f"  Sending part {i}/{len(parts)}...")
         send_sms(part)
+
+    # Leave terminal on default account so next script has an active session.
+    log("Logging into default account to keep terminal session active...")
+    login_default_account(credentials)
 
     log("=" * 60)
     log("TransactionHistory — DONE")

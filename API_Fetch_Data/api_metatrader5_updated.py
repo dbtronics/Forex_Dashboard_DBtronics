@@ -106,6 +106,11 @@ TWILIO_FROM_NUMBER  = os.getenv('TWILIO_FROM_NUMBER')
 # Parsed into a list here — add or remove numbers in .env without touching code.
 SMS_RECIPIENTS = [n.strip() for n in os.getenv('SMS_RECIPIENTS', '').split(',') if n.strip()]
 
+# MT5 default account — logged into at the end of every run so the terminal
+# always has an active session ready for the next scheduled script.
+# Set MT5_DEFAULT_ACCOUNT_ID in .env to the account ID of a reliable account.
+MT5_DEFAULT_ACCOUNT_ID = os.getenv('MT5_DEFAULT_ACCOUNT_ID', '').strip()
+
 # # api_web.csv — commented out, kept for future Flask dashboard use
 # import pandas as pd
 # CSV_OUTPUT_PATH = os.path.join(SCRIPT_DIR, '..', 'api_web.csv')
@@ -339,6 +344,33 @@ def send_sms(body):
             log(f"  SMS sent to {number}")
         except Exception as e:
             log_warn(f"  Failed to send SMS to {number}: {e}")
+
+
+def login_default_account(credentials):
+    """
+    Log into the MT5_DEFAULT_ACCOUNT_ID at the end of every run.
+    mt5.shutdown() only closes the Python IPC pipe — the terminal retains
+    whichever account was last logged into. By always finishing on a known
+    good account the terminal has an active session ready for the next script,
+    preventing the 'No IPC connection' / 'Authorization failed' errors that
+    occur when the terminal starts fresh with no active session.
+    """
+    if not MT5_DEFAULT_ACCOUNT_ID:
+        return
+
+    # Find credentials for the default account from the already-read list
+    default_cred = next(
+        (c for c in credentials if str(c['ID']) == MT5_DEFAULT_ACCOUNT_ID), None
+    )
+    if not default_cred:
+        log_warn(f"  Default account {MT5_DEFAULT_ACCOUNT_ID} not found in credentials — skipping default login.")
+        return
+
+    success = mt5.login(int(default_cred['ID']), default_cred['Password'], default_cred['Server'])
+    if success:
+        log(f"  Default account {MT5_DEFAULT_ACCOUNT_ID} logged in — terminal session active for next run.")
+    else:
+        log_warn(f"  Could not log into default account {MT5_DEFAULT_ACCOUNT_ID}: {mt5.last_error()}")
 
 
 def append_status_to_row(acc_data_ws, acc_data_rows, trading_date, account_id_str, status_text):
@@ -999,6 +1031,11 @@ def fetch_account_info(run_type, single_account=None):
 
         time.sleep(5)
         results.append(result)
+
+    # Leave terminal on the default account so the next scheduled script
+    # finds an active session and can immediately switch accounts.
+    log("Logging into default account to keep terminal session active...")
+    login_default_account(credentials)
 
     # ── Send SMS notifications ────────────────────────────────────────────────
     if run_type == 'start':
