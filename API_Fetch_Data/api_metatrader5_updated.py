@@ -960,12 +960,6 @@ def fetch_account_info(run_type, single_account=None):
 
         if not success:
             log_warn(f"  MT5 login failed for {cred['ID']} after {MAX_LOGIN_RETRIES} attempts — skipping")
-            # Reset the MT5 terminal connection so the stuck state from this failed
-            # login does not cascade and cause all subsequent accounts to fail too.
-            mt5.shutdown()
-            time.sleep(2)
-            if not mt5.initialize():
-                log_warn(f"  MT5 re-initialize() failed after reset: {mt5.last_error()}")
             results.append({'id': cred['ID'], 'type': cred['Type'], 'category': cred['Category'],
                             'status': 'skipped', 'reason': 'MT5 login failed'})
             # Record the error in Acc_data so it's visible in the sheet:
